@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple
 import json
-import re
+from typing import Any, Dict, Optional, Tuple
 
-from tools.score_engine import ScoreEngine
+from tools.score_engine import CONTROVERSY_KEY, RUBRIC, allowed_categories
 
 try:  # optional, only used to enrich the prompt if available
     from tools.dutch_banks import get_bank_metadata
@@ -14,208 +13,127 @@ except Exception:  # pragma: no cover - defensive fallback
 
 class ESGAgent:
     """
-    LLM-based ESG analysis agent.
+    LLM-based ESG analysis agent (advisory only).
+
+    It reads the context assembled by :class:`Server` and suggests a rubric
+    category for each indicator, with a short narrative. The suggestions are
+    shown next to the evidence-based categories in the UI but are never used
+    to compute a score.
 
     Parameters
     ----------
     llm :
-        Any object exposing ``ask(prompt: str, bank_name=None, question=None, pdf_text=None) -> str``.
-        In your project this is implemented by :class:`LocalLLM` in ``tools/local_llm.py``.
-    engine : ScoreEngine, optional
-        Deterministic numeric scoring engine.  If omitted, a fresh one is created.
+        Any object exposing ``ask(prompt: str) -> str``, such as
+        :class:`tools.local_llm.LocalLLM`.
     """
 
-    def __init__(self, llm, engine: Optional[ScoreEngine] = None) -> None:
+    def __init__(self, llm) -> None:
         self.llm = llm
-        self.engine = engine or ScoreEngine()
 
-    # Public entry point
-    def run(
-        self,
-        bank: str,
-        year: Optional[str],
-        question: Optional[str],
-        context_blob: str,
-    ) -> Dict[str, Any]:
+    def run(self, bank: str, question: Optional[str], context_blob: str) -> Dict[str, Any]:
         """
-        Run the full ESG pipeline for a single bank.
-
-        Parameters
-        ----------
-        bank : str
-            Bank name (canonical if possible).
-        year : str, optional
-            Year or reporting period.
-        question : str, optional
-            User focus question (e.g. "Which bank is best prepared for CSRD?").
-        context_blob : str
-            Bank-specific evidence text assembled by :class:`Server`.
-
         Returns
         -------
         dict
             {
-              "bank": bank,
               "analysis_text": str,
-              "categories": dict,  # rubric categories (strings)
-              "scores": dict       # output of ScoreEngine.from_categories(...)
+              "suggestions": {indicator: category},  # valid categories only
+              "rejected": {indicator: value},        # values outside the rubric
             }
         """
-        prompt = self._build_prompt(bank=bank, year=year, question=question, evidence=context_blob)
-        raw = self.llm.ask(prompt, bank_name=bank, question=question, pdf_text=context_blob)
+        prompt = self._build_prompt(bank=bank, question=question, evidence=context_blob)
+        raw = self.llm.ask(prompt)
+        analysis_text, parsed = self._split_analysis_and_json(raw)
 
-        analysis_text, categories = self._split_analysis_and_categories(raw)
-        scores = self.engine.from_categories(categories, bank=bank)
+        suggestions: Dict[str, str] = {}
+        rejected: Dict[str, Any] = {}
+        for key, value in parsed.items():
+            try:
+                allowed = allowed_categories(key)
+            except KeyError:
+                rejected[key] = value
+                continue
+            if isinstance(value, str) and value in allowed:
+                suggestions[key] = value
+            else:
+                rejected[key] = value
 
-        return {
-            "bank": bank,
-            "analysis_text": analysis_text,
-            "categories": categories,
-            "scores": scores,
-        }
+        return {"analysis_text": analysis_text, "suggestions": suggestions, "rejected": rejected}
 
     # Prompt construction
-    def _build_prompt(self, bank: str, year: Optional[str], question: Optional[str], evidence: str) -> str:
+    def _build_prompt(self, bank: str, question: Optional[str], evidence: str) -> str:
         meta_block = ""
         if get_bank_metadata is not None:
-            try:
-                meta = get_bank_metadata(bank) or {}
-            except Exception:
-                meta = {}
-            if meta:
-                meta_lines = [f"- {k}: {v}" for k, v in meta.items() if v]
-                if meta_lines:
-                    meta_block = "Known static metadata about the bank:\n" + "\n".join(meta_lines)
+            meta = get_bank_metadata(bank) or {}
+            meta_lines = [f"- {k}: {meta[k]}" for k in ("canonical", "country", "website") if meta.get(k)]
+            if meta_lines:
+                meta_block = "Known static metadata about the bank:\n" + "\n".join(meta_lines)
 
-        year_text = year or "latest available period"
         focus = question.strip() if question else "overall ESG risk profile and transition credibility"
+
+        rubric_lines = []
+        for pillar in ("E", "S", "G"):
+            for ind in (i for i in RUBRIC if i.pillar == pillar):
+                options = ", ".join(f'"{c}"' for c in ind.categories)
+                rubric_lines.append(f'- "{ind.key}" ({pillar}, {ind.label}): one of [{options}]')
+        rubric_lines.append(
+            f'- "{CONTROVERSY_KEY}": one of ["none", "moderate", "severe"] '
+            "(severe = new ESG-related fine, settlement or conviction this year)"
+        )
+        rubric_block = "\n".join(rubric_lines)
+        json_keys = ",\n".join(f'  "{ind.key}": "..."' for ind in RUBRIC) + f',\n  "{CONTROVERSY_KEY}": "..."'
 
         return f"""
 You are a senior EU sustainability supervisor (EBA/ECB/CSRD).
 
-Your task is to assess the ESG profile of the bank below using ONLY the evidence
-that follows. You MUST NOT invent facts. If data is missing or weak, you should
-downgrade the categories conservatively.
+Assess the ESG profile of the bank below using ONLY the evidence that
+follows. You MUST NOT invent facts. If data is missing or weak, choose the
+more conservative (weaker) option.
 
 Bank: {bank}
-Assessment period: {year_text}
 User focus: {focus}
 
 {meta_block}
 
 ==================== EVIDENCE (bank-specific) ====================
-The following text is all the evidence you have for this bank, compiled from:
-- Official annual / sustainability / CSRD reports (summarised);
-- Yahoo Finance business profile and risk hints;
-- ESG / regulatory news headlines.
-
-Read it carefully and use it as the ONLY basis for your judgement.
-
 {evidence}
 ===============================================================
 
 RUBRIC CLASSIFICATION
 ---------------------
-You must classify the bank on the following discrete categories.
-Pick exactly ONE value from the allowed options for each key:
+Pick exactly ONE value from the allowed options for each key, or
+"not_disclosed" if the evidence does not cover it:
 
-Environmental (E):
-- "climate_plan":        one of ["none", "weak", "science_based", "sbt_aligned"]
-- "emission_disclosure": one of ["none", "scope1", "scope1_2", "scope1_2_3"]
-- "financed_emissions":  one of ["none", "partial", "pcaf_full"]
-- "taxonomy_alignment":  one of ["none", "low", "medium", "high", "aligned"]
-- "risk_management":     one of ["none", "weak", "partial", "full", "strong"]
-- "fossil_policy":       one of ["none", "weak", "partial", "strong", "exit"]
-
-Social (S):
-- "diversity_inclusion": one of ["none", "partial", "full"]
-- "labor_rights":        one of ["none", "weak", "medium", "strong"]
-- "customer_protection": one of ["fined", "building", "mature"]
-- "aml_maturity":        one of ["fined", "weak", "building", "mature", "leading"]
-
-Governance (G):
-- "board_independence":  one of ["<33", "33_50", ">=50"]
-- "esg_oversight":       one of ["none", "csr_dept", "board_committee"]
-- "exec_comp_esg":       one of ["none", "<20", ">=20"]
-- "transparency_csrd":   one of ["non_compliant", "partial", "full"]
-
-If the evidence is ambiguous or weak, you MUST choose the more conservative
-(weaker) option.
+{rubric_block}
 
 Output requirements
 -------------------
-1. First, write a short narrative analysis (max ~300 words) in plain English,
-   in the voice of a prudent EU supervisor. Comment on E/S/G strengths,
-   weaknesses, transition risks and data quality.
-2. Then on a NEW LINE, output a single JSON object ONLY (no backticks, no commentary)
-   with exactly these keys and string values:
+1. First, write a short narrative analysis (max ~300 words) in plain English.
+2. Then, on a NEW LINE, output a single JSON object ONLY (no backticks, no
+   commentary) with exactly these keys and string values:
 
 {{
-  "climate_plan":        "...",
-  "emission_disclosure": "...",
-  "financed_emissions":  "...",
-  "taxonomy_alignment":  "...",
-  "risk_management":     "...",
-  "fossil_policy":       "...",
-  "diversity_inclusion": "...",
-  "labor_rights":        "...",
-  "customer_protection": "...",
-  "aml_maturity":        "...",
-  "board_independence":  "...",
-  "esg_oversight":       "...",
-  "exec_comp_esg":       "...",
-  "transparency_csrd":   "..."
+{json_keys}
 }}
-
-Do NOT include numeric E/S/G scores in the JSON.
-The scoring engine will convert these categories into 0–100 pillar scores
-and detailed rubric sub-scores.
 """
 
-    # Output parsing helpers
-    def _split_analysis_and_categories(self, raw: str) -> Tuple[str, Dict[str, Any]]:
-        """
-        Split the LLM output into:
-          - free-form analysis text
-          - parsed JSON categories dict
-        """
+    # Output parsing
+    @staticmethod
+    def _split_analysis_and_json(raw: str) -> Tuple[str, Dict[str, Any]]:
+        """Split the LLM output into narrative text and the last JSON object in it."""
         raw = (raw or "").strip()
-        if not raw:
-            return "", {}
-
-        # Find the last JSON object in the text
-        json_obj = None
-        json_text = ""
-        last_open = raw.rfind("{")
-        last_close = raw.rfind("}")
-        if last_open != -1 and last_close != -1 and last_close > last_open:
-            candidate = raw[last_open : last_close + 1]
+        end = raw.rfind("}")
+        start = raw.rfind("{", 0, end + 1)
+        # Walk back to the outermost "{" whose block parses as JSON.
+        while start != -1 and end != -1:
+            candidate = raw[start : end + 1]
             try:
-                json_obj = json.loads(candidate)
-                json_text = candidate
-            except Exception:
-                json_obj = None
-
-        if json_obj is None:
-            # Fallback: try first JSON-like block
-            m = re.search(r"\\{.*\\}", raw, flags=re.DOTALL)
-            if m:
-                candidate = m.group(0)
-                try:
-                    json_obj = json.loads(candidate)
-                    json_text = candidate
-                except Exception:
-                    json_obj = None
-
-        if json_obj is None:
-            # No valid JSON found
-            return raw, {}
-
-        analysis = raw.replace(json_text, "").strip()
-        if not analysis:
-            analysis = raw.strip()
-
-        if not isinstance(json_obj, dict):
-            json_obj = {}
-
-        return analysis, json_obj
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                start = raw.rfind("{", 0, start)
+                continue
+            if isinstance(parsed, dict):
+                analysis = (raw[:start] + raw[end + 1 :]).strip() or raw
+                return analysis, parsed
+            break
+        return raw, {}

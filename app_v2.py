@@ -1,468 +1,303 @@
-import streamlit as st
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List
 
+import altair as alt
+import matplotlib.pyplot as plt
 import pandas as pd
+import streamlit as st
 
 from server import Server
+from tools.evidence import REPORTING_YEAR
 from tools.radar_chart import create_esg_radar_chart
+from tools.score_engine import CONTROVERSY_DEDUCTION, PILLAR_NAMES
 
-# Bank list
-try:
-    from tools.dutch_banks import list_dutch_banks
+st.set_page_config(page_title="Dutch Bank ESG Benchmark", page_icon="📊", layout="wide")
 
-    BANK_LIST = [b for b in list_dutch_banks() if b in {"ING Group", "ABN AMRO", "Rabobank"}]
-except Exception:
-    BANK_LIST = ["ING Group", "ABN AMRO", "Rabobank"]
+# Categorical slots 1-3 of the validated reference palette (E, S, G).
+PILLAR_COLORS = {"E": "#2a78d6", "S": "#eb6834", "G": "#1baf7a"}
+FINAL_COLOR = "#2a78d6"
 
 
-# Backend server (cached)
 @st.cache_resource
 def get_server() -> Server:
     return Server()
 
 
 server = get_server()
-
-
-# Page config
-st.set_page_config(page_title="Dutch Bank ESG Intelligence System", page_icon="📊", layout="centered")
+BANKS = server.banks()
 
 st.sidebar.title("⚙️ Configuration")
-mode = st.sidebar.radio("Mode", ["Single Bank Analysis", "Compare Banks"])
+mode = st.sidebar.radio("Mode", ["Compare banks", "Single bank"])
 st.sidebar.markdown("---")
-st.sidebar.caption("Free-data pipeline: Yahoo Finance + Google News RSS + Rubric Engine")
+st.sidebar.markdown(
+    f"**How scores are made.** Every score comes from a reviewed evidence table built from the banks' "
+    f"{REPORTING_YEAR} annual reports: 14 rubric indicators across Environmental, Social and Governance "
+    "pillars (35/30/35), a controversy adjustment, and a compliance label. The same inputs always give "
+    "the same scores."
+)
+st.sidebar.markdown(
+    "**AI assistant:** "
+    + ("available. Advisory only; it never changes a score." if server.use_llm else "off (no local LLM running). Scores are unaffected.")
+)
 
 
-# PDF Extract
-def extract_pdf_text(uploaded_file) -> str:
-    if not uploaded_file:
-        return ""
-    try:
-        from pypdf import PdfReader
-    except Exception:
-        st.error("❌ pypdf not installed. Please run: `pip install pypdf`")
-        return ""
-
-    try:
-        reader = PdfReader(uploaded_file)
-        text_chunks = []
-        for page in reader.pages:
-            text_chunks.append(page.extract_text() or "")
-        return "\n".join(text_chunks)
-    except Exception as e:
-        st.warning(f"⚠️ PDF parsing failed: {e}")
-        return ""
-
-
-# UI helpers
-def render_score_cards(scores: Dict[str, Any]):
-    pillar = scores.get("pillar_scores", {}) or {}
-    e = float(pillar.get("E", scores.get("E", 0.0)) or 0.0)
-    s = float(pillar.get("S", scores.get("S", 0.0)) or 0.0)
-    g = float(pillar.get("G", scores.get("G", 0.0)) or 0.0)
-    final = float(scores.get("final", 0.0) or 0.0)
-    label = scores.get("label", "N/A")
-
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Environmental (E)", f"{e:.1f}")
-    c2.metric("Social (S)", f"{s:.1f}")
-    c3.metric("Governance (G)", f"{g:.1f}")
-    c4.metric("Final ESG Score", f"{final:.1f}", label)
-
-
-def render_mc_table(scores: Dict[str, Any]):
-    mc = scores.get("mc", {}) or {}
-    st.markdown("### 🎯 Monte-Carlo Confidence Band")
-    st.table(
-        {
-            "Metric": ["Mean", "P05 (Conservative)", "P50 (Median)", "P95 (Optimistic)"],
-            "Value": [
-                float(mc.get("mean", 0.0) or 0.0),
-                float(mc.get("p05", 0.0) or 0.0),
-                float(mc.get("p50", 0.0) or 0.0),
-                float(mc.get("p95", 0.0) or 0.0),
-            ],
-        }
+# Rendering helpers
+def render_score_cards(scores: Dict[str, Any]) -> None:
+    p = scores["pillars"]
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Environmental (E)", f"{p['E']:.1f}")
+    c2.metric("Social (S)", f"{p['S']:.1f}")
+    c3.metric("Governance (G)", f"{p['G']:.1f}")
+    c4.metric(
+        f"Controversy ({scores['controversy']})",
+        f"−{scores['controversy_deduction']:.1f}",
+        help=f"Points deducted from the weighted E/S/G score ({scores['weighted']:.1f}).",
     )
+    c5.metric("Final ESG score", f"{scores['final']:.1f}", help="0.35×E + 0.30×S + 0.35×G − controversy deduction")
+    st.markdown(f"**Compliance label:** {scores['label']}  ·  Meet ≥ 75, Almost Meet ≥ 50, otherwise Not Meet")
 
 
-def render_radar(scores: Dict[str, Any], bank: str):
-    pillar = scores.get("pillar_scores", {}) or {}
-    e = float(pillar.get("E", scores.get("E", 0.0)) or 0.0)
-    s = float(pillar.get("S", scores.get("S", 0.0)) or 0.0)
-    g = float(pillar.get("G", scores.get("G", 0.0)) or 0.0)
-
-    try:
-        fig = create_esg_radar_chart(e, s, g, bank_name=bank)
-        st.pyplot(fig, clear_figure=True)
-    except Exception as ex:
-        st.warning(f"⚠️ Radar chart failed: {ex}")
+def render_radar(scores: Dict[str, Any], bank: str) -> None:
+    p = scores["pillars"]
+    fig = create_esg_radar_chart(p["E"], p["S"], p["G"], bank_name=bank)
+    st.pyplot(fig, clear_figure=True, width="content")
+    plt.close(fig)
 
 
-def render_subscore_table(scores: Dict[str, Any]):
-    sub_scores = scores.get("sub_scores", {}) or {}
-    if not sub_scores:
+def render_breakdown(result: Dict[str, Any]) -> None:
+    """Indicator -> category -> evidence -> source page, per pillar."""
+    breakdown: List[Dict[str, Any]] = result["breakdown"]
+    documents = sorted({item["source_document"] for item in breakdown if item["source_document"]})
+    st.caption(f"Source: {', '.join(documents)}. Page links open the PDF at the cited page.")
+    for pillar, name in PILLAR_NAMES.items():
+        lines = [
+            f"**{name} - {result['scores']['pillars'][pillar]:.1f}**",
+            "",
+            "| Indicator | Category | Score | Weight | Evidence | Source |",
+            "|---|---|---|---|---|---|",
+        ]
+        for item in (i for i in breakdown if i["pillar"] == pillar):
+            category = "⚠️ not disclosed" if item["not_disclosed"] else f"`{item['category']}`"
+            source = f"[p. {item['page']}]({item['page_url']})" if item["page"] else "-"
+            if item["status"] != "confirmed":
+                source += " (draft)"
+            evidence = item["evidence_summary"].replace("|", "/")
+            lines.append(
+                f"| {item['label']} | {category} | {item['score']} | {item['weight']:.0%} | {evidence} | {source} |"
+            )
+        st.markdown("\n".join(lines))
+
+    c = result["controversy_evidence"]
+    st.markdown(
+        f"**Controversy - {c['category']} (−{CONTROVERSY_DEDUCTION.get(c['category'], 5):g} points)**: "
+        f"{c['evidence_summary']} [{c['source_document']}, p. {c['page']}]({c['page_url']})"
+    )
+    if result["draft_indicators"]:
+        st.warning(f"Unreviewed (draft) evidence rows: {', '.join(result['draft_indicators'])}")
+    if any(item["not_disclosed"] for item in result["breakdown"]):
+        st.warning("⚠️ Some indicators are not disclosed in the report; they receive the lowest score.")
+    with st.expander("Analyst notes per indicator"):
+        for item in breakdown:
+            if item["notes"]:
+                st.markdown(f"- **{item['label']}**: {item['notes']}")
+
+
+def render_assistant(assistant: Dict[str, Any]) -> None:
+    st.markdown("### 🤖 AI assistant (advisory only)")
+    if not assistant.get("enabled"):
+        st.info(
+            "The AI assistant is off because no local LLM is running. It is optional and never changes the "
+            "scores. To enable it, install Ollama and run `ollama pull llama3`."
+        )
         return
+    if assistant.get("error"):
+        st.warning(f"The AI assistant stopped early: {assistant['error']}")
 
-    rows = []
-    for pillar, items in sub_scores.items():
-        if not isinstance(items, dict):
-            continue
-        for name, val in items.items():
-            rows.append({"Pillar": pillar, "Indicator": name, "Score": val})
-
-    if rows:
-        st.markdown("### 📑 Rubric Sub-Scores")
-        df = pd.DataFrame(rows)
-        # ---------- Rubric Sub-Scores ----------
-        df = pd.DataFrame(rows).sort_values(["Pillar", "Indicator"], ignore_index=True)
-
-        styled = (
-            df.style
-            .set_properties(**{
-                "font-size": "15px",
-                "text-align": "left",
-                "line-height": "1.6",
-                "padding": "6px 10px"
-            })
+    if assistant.get("suggestions"):
+        st.markdown("**AI suggestion, not used in score**")
+        df = pd.DataFrame(
+            [
+                {
+                    "Indicator": s["label"],
+                    "Evidence category (used)": s["evidence_category"],
+                    "AI suggestion (not used)": s["ai_suggestion"] or "-",
+                    "Agrees": "✓" if s["agrees"] else "",
+                }
+                for s in assistant["suggestions"]
+            ]
         )
+        st.dataframe(df, hide_index=True)
+        if assistant.get("rejected"):
+            st.caption(f"AI values outside the rubric were ignored: {assistant['rejected']}")
 
-        table_height = 140 + 30 * len(df)
+    for title, key in (
+        ("AI narrative report", "report"),
+        ("AI analysis", "analysis_text"),
+        ("AI summary of the annual report", "pdf_summary"),
+        ("AI summary of ESG news", "news_summary"),
+    ):
+        if assistant.get(key):
+            with st.expander(f"{title} (not used in score)"):
+                st.markdown(assistant[key])
 
-        st.dataframe(
-            styled,
-            use_container_width=False,
-            width=850,
-            height=table_height,
-            hide_index=True
-        )
 
-
-
-def render_sources_block(result: Dict[str, Any]):
-    """
-    Show Yahoo snapshot + News sources in a clean way.
-    Compatible with server.py response.
-    """
-    yahoo = result.get("yahoo", {}) or {}
-    news = result.get("news", {}) or {}
-    items = news.get("items", []) or []
-    query = news.get("query", "")
-
-    with st.expander("🔎 Data Sources (Yahoo + Google News RSS)", expanded=False):
-        c1, c2 = st.columns([1, 1])
-
+def render_context(result: Dict[str, Any]) -> None:
+    with st.expander("🔎 News and market context (not used in score)"):
+        c1, c2 = st.columns(2)
         with c1:
-            st.markdown("**Yahoo Finance Snapshot (free)**")
-            if yahoo.get("ok"):
-                st.write(yahoo.get("snapshot", ""))
-            else:
-                st.info(f"Yahoo snapshot unavailable: {yahoo.get('error', 'unknown')}")
-                st.caption("Tip: `pip install yfinance pandas` and ensure ticker mapping is available.")
-
+            st.markdown("**Yahoo Finance snapshot**")
+            st.write(result["yahoo"]["snapshot"] or "No Yahoo data available.")
         with c2:
-            st.markdown("**News Sources (Google News RSS, free)**")
-            if query:
-                st.caption(f"Query: {query}")
+            st.markdown("**Google News RSS**")
+            items = result["news"]["items"]
             if not items:
                 st.info("No news items fetched.")
-            else:
-                for it in items[:10]:
-                    title = it.get("headline", "(no title)")
-                    url = it.get("url", "")
-                    src = it.get("source", "")
-                    pub = it.get("published", "")
-                    line = f"- [{title}]({url})" if url else f"- {title}"
-                    if src:
-                        line += f" — *{src}*"
-                    if pub:
-                        line += f" — {pub}"
-                    st.markdown(line)
+            for it in items[:10]:
+                line = f"- [{it['headline']}]({it['url']})" if it["url"] else f"- {it['headline']}"
+                if it["source"]:
+                    line += f" - *{it['source']}*"
+                if it["published"]:
+                    line += f" - {it['published']}"
+                st.markdown(line)
 
 
-def scores_to_row(bank: str, scores: Dict[str, Any]) -> Dict[str, Any]:
-    pillar = scores.get("pillar_scores", {}) or {}
-    e = float(pillar.get("E", scores.get("E", 0.0)) or 0.0)
-    s = float(pillar.get("S", scores.get("S", 0.0)) or 0.0)
-    g = float(pillar.get("G", scores.get("G", 0.0)) or 0.0)
-    final = float(scores.get("final", 0.0) or 0.0)
-    label = scores.get("label", "N/A")
-    return {"Bank": bank, "E": e, "S": s, "G": g, "Final": final, "Label": label}
-
-
-def render_compare_charts(df: pd.DataFrame):
-    if df.empty:
-        return
-
-    st.markdown("### 📈 Charts")
-
-    try:
-        import altair as alt
-    except Exception:
-        st.caption("Altair not available; skipping charts.")
-        return
-
-    st.markdown("**Final ESG Score**")
-    df_final = df[["Bank", "Final"]].reset_index(drop=True)
-
-    chart_final = (
-        alt.Chart(df_final)
-        .mark_bar()
+def render_compare_charts(df: pd.DataFrame) -> None:
+    order = df["Bank"].tolist()
+    final = (
+        alt.Chart(df)
+        .mark_bar(size=36, cornerRadiusEnd=4, color=FINAL_COLOR)
         .encode(
-            x=alt.X("Bank:N", sort="-y"),
-            y=alt.Y("Final:Q"),
-            tooltip=["Bank", "Final"],
+            x=alt.X("Bank:N", sort=order, title=None, axis=alt.Axis(labelAngle=0)),
+            y=alt.Y("Final:Q", scale=alt.Scale(domain=[0, 100]), title="Final ESG score"),
+            tooltip=["Bank", alt.Tooltip("Final:Q", format=".1f"), "Label"],
         )
-        .properties(width=360, height=260)
     )
-    st.altair_chart(chart_final, use_container_width=False)
-
-    # ---------- E / S / G Comparison ----------
-    st.markdown("**E / S / G Comparison**")
-    melted = df.melt(
-        id_vars=["Bank"],
-        value_vars=["E", "S", "G"],
-        var_name="Pillar",
-        value_name="Score",
+    threshold = (
+        alt.Chart(pd.DataFrame({"y": [75], "text": ["Meet threshold (75)"]}))
+        .mark_rule(strokeDash=[4, 4], color="#8a8986")
+        .encode(y="y:Q")
+    )
+    threshold_label = (
+        alt.Chart(pd.DataFrame({"y": [75], "text": ["Meet threshold (75)"]}))
+        .mark_text(align="left", dx=4, dy=-6, color="#52514e")
+        .encode(y="y:Q", x=alt.value(0), text="text:N")
     )
 
-    chart_esg = (
+    melted = df.melt(id_vars=["Bank"], value_vars=["E", "S", "G"], var_name="Pillar", value_name="Score")
+    pillars = (
         alt.Chart(melted)
-        .mark_bar()
+        .mark_bar(cornerRadiusEnd=4)
         .encode(
-            x=alt.X("Bank:N", sort="-y"),
-            y=alt.Y("Score:Q"),
-            xOffset="Pillar:N",
-            color="Pillar:N",
-            tooltip=["Bank", "Pillar", "Score"],
+            x=alt.X("Bank:N", sort=order, title=None, axis=alt.Axis(labelAngle=0)),
+            xOffset=alt.XOffset("Pillar:N", sort=["E", "S", "G"]),
+            y=alt.Y("Score:Q", scale=alt.Scale(domain=[0, 100]), title="Pillar score"),
+            color=alt.Color(
+                "Pillar:N",
+                sort=["E", "S", "G"],
+                scale=alt.Scale(domain=list(PILLAR_COLORS), range=list(PILLAR_COLORS.values())),
+                legend=alt.Legend(orient="top", title=None),
+            ),
+            tooltip=["Bank", "Pillar", alt.Tooltip("Score:Q", format=".1f")],
         )
-        .properties(width=380, height=260)
     )
 
-    st.altair_chart(chart_esg, use_container_width=False)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown("**Final ESG score**")
+        st.altair_chart((final + threshold + threshold_label).properties(height=280), width="stretch")
+    with c2:
+        st.markdown("**E / S / G pillar scores**")
+        st.altair_chart(pillars.properties(height=280), width="stretch")
 
 
+# MODE 1 - Compare banks
+if mode == "Compare banks":
+    st.title("🏆 Dutch bank ESG benchmark")
+    st.caption(f"Evidence: {REPORTING_YEAR} annual reports of ING Group, ABN AMRO and Rabobank.")
 
-# MODE 1 — Single Bank Analysis
-if mode == "Single Bank Analysis":
-    st.title("🔍 Single Bank ESG Analysis")
+    banks = st.multiselect("Banks", BANKS, default=BANKS)
+    if not banks:
+        st.warning("Select at least one bank.")
+        st.stop()
 
-    col_left, col_right = st.columns([2, 1])
+    comparison = server.compare_banks(banks)
+    per_bank = comparison["per_bank_results"]
+    if comparison["errors"]:
+        st.error(f"Some banks could not be scored: {comparison['errors']}")
 
-    with col_left:
-        bank = st.selectbox("Select a Dutch Bank", BANK_LIST)
-        manual_bank = st.text_input("Or type bank name manually (optional)")
-        if manual_bank.strip():
-            bank = manual_bank.strip()
-
-        year = st.text_input("Year / Period (optional)", placeholder="e.g. 2023 or 2020–2024")
-
-        # Make the box larger to avoid truncation
-        question = st.text_area(
-            "ESG Question (optional)",
-            placeholder=(
-                "Example: Assess ING’s ESG performance in 2023 focusing on: "
-                "(1) climate transition & financed emissions, "
-                "(2) AML/KYC enforcement risks, "
-                "(3) board oversight & CSRD readiness."
-            ),
-            height=160,
+    rows = []
+    for rank, bank in enumerate(comparison["ranking"], start=1):
+        sc = per_bank[bank]["scores"]
+        rows.append(
+            {
+                "Rank": rank,
+                "Bank": bank,
+                "E": sc["pillars"]["E"],
+                "S": sc["pillars"]["S"],
+                "G": sc["pillars"]["G"],
+                "Weighted E/S/G": sc["weighted"],
+                "Controversy": f"{sc['controversy']} (−{sc['controversy_deduction']:g})",
+                "Final": sc["final"],
+                "Label": sc["label"],
+            }
         )
-        st.caption("Tip: You can paste long multi-part questions here; the box is intentionally tall.")
+    df = pd.DataFrame(rows)
 
-    with col_right:
-        uploaded_pdf = st.file_uploader("Upload ESG / Sustainability PDF (optional)", type=["pdf"])
+    st.markdown("### 📊 Comparison table")
+    st.dataframe(
+        df,
+        hide_index=True,
+        column_config={c: st.column_config.NumberColumn(format="%.1f") for c in ("E", "S", "G", "Weighted E/S/G", "Final")},
+    )
+    render_compare_charts(df)
+
+    st.markdown("### 📡 Radar charts")
+    cols = st.columns(len(comparison["ranking"]))
+    for col, bank in zip(cols, comparison["ranking"]):
+        with col:
+            render_radar(per_bank[bank]["scores"], bank)
+
+    st.markdown("### 🔍 Score breakdown per bank")
+    for bank in comparison["ranking"]:
+        with st.expander(f"{bank} - {per_bank[bank]['scores']['final']:.1f} ({per_bank[bank]['scores']['label']})"):
+            render_score_cards(per_bank[bank]["scores"])
+            render_breakdown(per_bank[bank])
+
+# MODE 2 - Single bank
+else:
+    st.title("🔍 Single bank")
+    bank = st.selectbox("Bank", BANKS)
+
+    scored = server.score_bank(bank)
+    render_score_cards(scored["scores"])
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        render_radar(scored["scores"], bank)
+    st.markdown("### 📑 Score breakdown")
+    render_breakdown(scored)
 
     st.markdown("---")
+    st.markdown("### Optional: news context and AI assistant")
+    st.caption("Fetches news and market data and, if a local LLM is running, AI suggestions. Scores above do not change.")
+    question = ""
+    uploaded_pdf = None
+    if server.use_llm:
+        question = st.text_area("Focus question for the AI assistant (optional)", height=100)
+        uploaded_pdf = st.file_uploader("Extra PDF for the AI assistant (optional)", type=["pdf"])
 
-    if st.button("Run ESG Analysis", type="primary"):
-        cache = st.session_state.get("compare_cache")
-        if cache and bank in (cache.get("per_bank_results") or {}):
-            st.info("✅ Using cached comparison result for this bank (same as ESG Comparison Table).")
-            result = cache["per_bank_results"][bank]
-        else:
-            st.info("⏳ Running analysis…")
-            pdf_text = extract_pdf_text(uploaded_pdf)
+    if st.button("Load context", type="primary"):
+        pdf_text = ""
+        if uploaded_pdf is not None:
+            from tools.pdf_fetcher import pdf_bytes_to_text
 
+            pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
+        with st.spinner("Fetching news and running the AI assistant..."):
             result = server.analyze_bank(
                 bank=bank,
-                question=question or "",
-                year=year or "",
-                pdf_text=pdf_text,
+                question=question or None,
+                pdf_text=pdf_text or None,
                 pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
             )
-
-        if not result.get("ok"):
-            st.error(f"❌ Failed: {result.get('error')}")
-            with st.expander("Traceback"):
-                st.code(result.get("traceback", ""))
-        else:
-            scores = result["scores"]
-            final_report = result.get("final_report", "")
-            used_fallback = (result.get("raw", {}) or {}).get("used_fallback_from_yahoo", False)
-
-
-            if used_fallback:
-                st.warning("ℹ️ LLM categories looked low-information; scores were auto-derived from Yahoo/news signals to ensure differentiation.")
-
-            # Cards
-            render_score_cards(scores)
-
-            # Radar + MC
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                st.markdown("### 📊 ESG Radar Chart")
-                render_radar(scores, result.get("bank", bank))
-            with c2:
-                render_mc_table(scores)
-
-            # Subscores
-            render_subscore_table(scores)
-
-            # Report + Sources
-            st.markdown("---")
-            tabs = st.tabs(["📘 Final Report", "🧾 Sources"])
-            with tabs[0]:
-                st.markdown(final_report if final_report else "_No report returned._")
-            with tabs[1]:
-                render_sources_block(result)
-
-
-# MODE 2 — Compare Banks
-elif mode == "Compare Banks":
-    st.title("🏆 Compare Dutch Banks")
-
-    st.markdown("Compare banks using the same focus question. The system uses free sources (Yahoo + Google News RSS) and a rubric engine.")
-
-    banks = st.multiselect("Select banks to compare", BANK_LIST, default=BANK_LIST[:3])
-
-    year = st.text_input("Year / Period (optional, applied to all banks)", "")
-
-    comparison_question = st.text_area(
-        "Comparison Question / Focus (optional)",
-        placeholder=(
-            "Compare these banks on:\n"
-            "1) Climate transition credibility (targets, financed emissions, taxonomy alignment)\n"
-            "2) AML/KYC & compliance risk (recent enforcement, control maturity)\n"
-            "3) Governance strength (board oversight, remuneration linkage, CSRD readiness)\n"
-            "Then provide a ranked conclusion and key limitations."
-        ),
-        height=180,
-    )
-
-    uploaded_pdf = st.file_uploader("Upload a common ESG PDF (optional, shared across all banks)", type=["pdf"])
-
-    st.markdown("---")
-
-    if st.button("Run Comparison", type="primary"):
-        if not banks:
-            st.warning("Please select at least one bank.")
-            st.stop()
-
-        st.info("⏳ Running comparison…")
-
-        pdf_text = extract_pdf_text(uploaded_pdf)
-        pdf_texts = {b: pdf_text for b in banks}
-
-        result = server.compare_banks(
-            banks=banks,
-            year=year or "",
-            pdf_texts=pdf_texts,
-            comparison_question=comparison_question or "",
-        )
-
-        if not result.get("ok", False):
-            st.error(f"❌ Comparison failed: {result.get('error')}")
-            with st.expander("Traceback"):
-                st.code(result.get("traceback", ""))
-            st.stop()
-
-        scores_map = result.get("results", {}) or {}
-        per_bank_results = result.get("per_bank_results", {}) or {}
-        st.session_state["compare_cache"] = {
-            "scores_map": scores_map,
-            "per_bank_results": per_bank_results,
-            "year": year or "",
-            "comparison_question": comparison_question or "",
-        }
-        summary = result.get("comparison_summary", "")
-        errors = result.get("errors", {}) or {}
-
-        if errors:
-            st.warning("Some banks failed to analyse (see details below).")
-            with st.expander("Per-bank errors"):
-                st.write(errors)
-
-        # Table
-        st.markdown("### 📊 ESG Comparison Table")
-        rows = [scores_to_row(bank, sc) for bank, sc in scores_map.items()]
-        df = pd.DataFrame(rows).sort_values("Final", ascending=False)
-
-        styled = (
-            df.style
-            .set_properties(**{
-                "font-size": "15px",
-                "text-align": "center",
-                "line-height": "1.6",
-                "padding": "6px 8px"
-            })
-        )
-
-        table_height = 120 + 32 * len(df)
-
-        st.dataframe(
-            styled,
-            use_container_width=False,
-            width=820,
-            height=table_height,
-            hide_index=True
-        )
-
-        
-        # Charts
-        render_compare_charts(df)
-
-        # Summary
-        st.markdown("---")
-        st.markdown("### 📘 Comparison Summary (LLM)")
-        st.markdown(summary if summary else "_No summary returned._")
-
-        # Radar for every bank
-        st.markdown("---")
-        st.markdown("### 📡 Radar Charts (All Selected Banks)")
-        bank_order = df["Bank"].tolist()
-
-        cols_per_row = 3
-        for i in range(0, len(bank_order), cols_per_row):
-            row_banks = bank_order[i : i + cols_per_row]
-            cols = st.columns(len(row_banks))
-            for j, b in enumerate(row_banks):
-                with cols[j]:
-                    st.markdown(f"**{b}**")
-                    render_radar(scores_map[b], b)
-
-        # Drill-down
-        st.markdown("---")
-        st.markdown("### 🔍 Drill-down (per bank)")
-        for b in bank_order:
-            with st.expander(f"Details — {b}", expanded=False):
-                sc = scores_map[b]
-                render_score_cards(sc)
-                c1, c2 = st.columns([1, 1])
-                with c1:
-                    render_radar(sc, b)
-                with c2:
-                    render_mc_table(sc)
-
-                render_subscore_table(sc)
-
-                # If server returned per-bank full results, show sources + report
-                full = per_bank_results.get(b)
-                if isinstance(full, dict):
-                    tabs = st.tabs(["📘 Report", "🧾 Sources"])
-                    with tabs[0]:
-                        st.markdown(full.get("final_report", "") or "_No report returned._")
-                    with tabs[1]:
-                        render_sources_block(full)
-                else:
-                    st.caption("No per-bank detailed payload returned by server (this is optional).")
+        render_context(result)
+        render_assistant(result["assistant"])
+    elif not server.use_llm:
+        render_assistant({"enabled": False})

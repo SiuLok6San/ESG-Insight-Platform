@@ -2,367 +2,259 @@ from __future__ import annotations
 
 import copy
 import hashlib
-import random
-import traceback
-from typing import Any, Dict, List, Optional, Tuple
-
-from tools.yahoo_client import YahooFinanceClient
-from tools.free_news import FreeNewsClient
-from tools.pdf_fetcher import fetch_official_pdf
-from tools.pdf_summarizer import PDFSummarizer
-from tools.score_engine import ScoreEngine
-from tools.local_llm import LocalLLM
+from dataclasses import asdict
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from agents.esg_agent import ESGAgent
-from agents.news_agent import NewsSummariser
-from agents.nlu_agent import NLUAgent
 from agents.final_writer import FinalWriterAgent
+from agents.news_agent import NewsSummariser
+from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, load_evidence
+from tools.free_news import FreeNewsClient
+from tools.local_llm import LocalLLM
+from tools.pdf_fetcher import fetch_official_pdf
+from tools.pdf_summarizer import PDFSummarizer
+from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
+from tools.yahoo_client import YahooFinanceClient
+
+T = TypeVar("T")
 
 
 class Server:
     """
-    Central orchestrator:
-    - fetches Yahoo snapshot and ESG news
-    - fetches + summarises PDF text
-    - builds evidence for the ESG agent
-    - returns numeric scores + narratives
+    Central orchestrator. One analysis has three independent parts:
+
+    1. Scores: evidence table -> ScoreEngine. Deterministic, offline, and
+       identical with or without the LLM.
+    2. Context (optional): Yahoo Finance snapshot and Google News RSS headlines.
+    3. AI assistant (optional, advisory): the local LLM summarises the annual
+       report and news, suggests rubric categories and writes a narrative.
+       Its output is shown separately and never changes a score.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        use_llm: Optional[bool] = None,
+        fetch_external: bool = True,
+        evidence_path: Path | str = EVIDENCE_PATH,
+        engine_config: Optional[ScoreEngineConfig] = None,
+    ) -> None:
+        """
+        Parameters
+        ----------
+        use_llm : bool, optional
+            ``False`` never contacts the LLM. ``None`` or ``True`` uses it only
+            if the local Ollama server is reachable.
+        fetch_external : bool
+            Fetch Yahoo Finance and Google News context (network access).
+        """
+        self.evidence = load_evidence(evidence_path)
+        self.engine = ScoreEngine(engine_config)
+        self.fetch_external = fetch_external
         self.llm = LocalLLM()
+        self.use_llm = False if use_llm is False else self.llm.is_available()
+
         self.yahoo = YahooFinanceClient()
         self.news_client = FreeNewsClient()
         self.pdf_summarizer = PDFSummarizer(self.llm)
-        self.score_engine = ScoreEngine()
         self.news_agent = NewsSummariser(self.llm)
-        self.esg_agent = ESGAgent(self.llm, engine=self.score_engine)
-        self.nlu = NLUAgent(self.llm)
+        self.esg_agent = ESGAgent(self.llm)
         self.writer = FinalWriterAgent(self.llm)
         self.cache: Dict[str, Dict[str, Any]] = {}
 
-    # Helpers
-    def _question_hash(self, question: Optional[str]) -> str:
-        """Return a short deterministic hash for an ESG question (or placeholder)."""
-        text = (question or "").strip()
-        if not text:
-            return "no-question"
-        return hashlib.sha256(text.encode()).hexdigest()[:12]
+    # Public API
+    def banks(self) -> List[str]:
+        return self.evidence.banks()
 
-    def _cache_key(self, mode: str, bank: str, question: Optional[str]) -> str:
-        """
-        Generate a cache key. Comparison caches by bank only; single includes question hash.
-        """
-        normalized_mode = "compare" if mode == "compare" else "single"
-        if normalized_mode == "compare":
-            return f"{normalized_mode}::{bank}::{self._question_hash(question)}"
-        return f"{normalized_mode}:{bank}:{self._question_hash(question)}"
+    def score_bank(self, bank: str) -> Dict[str, Any]:
+        """Deterministic scores plus the evidence behind every indicator."""
+        rows = self.evidence.for_bank(bank)
+        result = self.engine.score(self.evidence.categories(bank), bank=bank)
 
-    def read_pdf(self, uploaded_file) -> str:
-        """Extract text from an uploaded PDF (Streamlit file_uploader output)."""
-        try:
-            from pypdf import PdfReader
-        except Exception as exc:  # pragma: no cover - optional dependency
-            print(f"[Server] pypdf not available: {exc}")
-            return ""
-
-        try:
-            reader = PdfReader(uploaded_file)
-            pages = [page.extract_text() or "" for page in reader.pages]
-            return "\n".join(pages)
-        except Exception as exc:
-            print(f"[Server] Failed to read uploaded PDF: {exc}")
-            return ""
-
-    def _fetch_news(self, bank: str) -> Tuple[List[Dict[str, str]], str]:
-        """Fetch and summarise ESG news for a bank."""
-        try:
-            items = self.news_client.search(bank, limit=10)
-        except Exception as exc:  # pragma: no cover - network errors handled softly
-            print(f"[Server] News fetch failed for {bank}: {exc}")
-            return [], ""
-
-        try:
-            summary = self.news_agent.summarise(bank, items)
-        except Exception as exc:
-            print(f"[Server] News summarisation failed for {bank}: {exc}")
-            summary = ""
-
-        return items, summary
-
-    def _fetch_pdf_text(self, bank: str, year: Optional[str], uploaded_text: Optional[str]) -> str:
-        """Prefer uploaded PDF text; fall back to static official PDFs."""
-        if uploaded_text:
-            return uploaded_text
-
-        try:
-            return fetch_official_pdf(bank=bank, year=year)
-        except Exception as exc:  # pragma: no cover - network errors handled softly
-            print(f"[Server] Official PDF fetch failed for {bank}: {exc}")
-            return ""
-
-    def _summarise_pdf(self, pdf_text: str, bank: str, year: Optional[str]) -> str:
-        if not pdf_text:
-            return ""
-        try:
-            return self.pdf_summarizer.summarize(pdf_text, bank=bank, year=year)
-        except Exception as exc:
-            print(f"[Server] PDF summarisation failed for {bank}: {exc}")
-            return ""
-
-    def _build_context_blob(
-        self,
-        yahoo_snapshot: str,
-        news_summary: str,
-        pdf_summary: str,
-        year: Optional[str],
-        question: Optional[str],
-    ) -> str:
-        year_text = year or "latest available period"
-        focus = f"Focus question: {question}\n\n" if question else ""
-        return (
-            f"Assessment period: {year_text}\n"
-            f"{focus}"
-            f"--- Yahoo Snapshot ---\n{yahoo_snapshot or 'N/A'}\n\n"
-            f"--- ESG News Summary ---\n{news_summary or 'N/A'}\n\n"
-            f"--- PDF Summary ---\n{pdf_summary or 'N/A'}\n"
-        )
-
-    def _format_sources(self, news_items: List[Dict[str, str]], pdf_text: str) -> str:
-        lines: List[str] = []
-        if news_items:
-            lines.append("News links:")
-            for it in news_items:
-                title = (it.get("title") or "").strip()
-                link = (it.get("link") or "").strip()
-                if link:
-                    bullet = f"- {title} ({link})" if title else f"- {link}"
-                    lines.append(bullet)
-        else:
-            lines.append("News links: none fetched.")
-
-        lines.append("PDF source: uploaded or official text loaded." if pdf_text else "PDF source: none.")
-        return "\n".join(lines)
-
-    def _news_items_for_ui(self, items: List[Dict[str, str]]) -> List[Dict[str, str]]:
-        """Adapt raw news items to the UI schema."""
-        ui_items: List[Dict[str, str]] = []
-        for it in items:
-            ui_items.append(
+        breakdown = []
+        for ind in result.indicators:
+            row = rows[ind.key]
+            breakdown.append(
                 {
-                    "headline": it.get("title") or it.get("headline") or "",
-                    "url": it.get("link") or it.get("url") or "",
-                    "source": it.get("source") or "",
-                    "published": it.get("published") or "",
-                    "summary": it.get("snippet") or it.get("summary") or "",
+                    **asdict(ind),
+                    "evidence_summary": row.evidence_summary,
+                    "source_document": row.source_document,
+                    "page": row.page,
+                    "page_url": row.page_url,
+                    "status": row.status,
+                    "notes": row.notes,
                 }
             )
-        return ui_items
 
-    def _yahoo_snapshot_struct(self, snapshot_text: str, bank: str) -> Dict[str, Any]:
-        """Wrap Yahoo snapshot string into a simple dict expected by UI."""
+        scores = result.to_dict()
+        scores.pop("indicators")
         return {
-            "ok": bool(snapshot_text),
-            "snapshot": snapshot_text or "No Yahoo data available.",
-            "name": bank,
-            "ticker": None,
+            "scores": scores,
+            "breakdown": breakdown,
+            "controversy_evidence": rows[CONTROVERSY_KEY].to_dict(),
+            "draft_indicators": [key for key, row in rows.items() if row.status != "confirmed"],
         }
 
-    def _fallback_categories(self, bank: str) -> Dict[str, str]:
-        """Generate deterministic rubric categories when LLM is unavailable."""
-        seed = int(hashlib.sha256(bank.encode()).hexdigest(), 16) % (2**32)
-        rng = random.Random(seed)
-        pick = lambda opts: rng.choice(opts)
-
-        return {
-            "climate_plan": pick(["weak", "science_based", "sbt_aligned", "none"]),
-            "emission_disclosure": pick(["scope1", "scope1_2", "scope1_2_3"]),
-            "financed_emissions": pick(["partial", "pcaf_full"]),
-            "taxonomy_alignment": pick(["low", "medium", "high"]),
-            "risk_management": pick(["partial", "full", "strong"]),
-            "fossil_policy": pick(["weak", "partial", "strong"]),
-            "green_finance": pick(["basic", "growing", "leading"]),
-            "climate_targets": pick(["intensity_only", "absolute_partial", "absolute_full"]),
-            "diversity_inclusion": pick(["partial", "full"]),
-            "labor_rights": pick(["medium", "strong"]),
-            "customer_protection": pick(["building", "mature"]),
-            "community_investment": pick(["basic", "mature"]),
-            "aml_maturity": pick(["building", "mature"]),
-            "conduct_risk": pick(["medium", "low"]),
-            "data_privacy": pick(["medium", "strong"]),
-            "employee_wellbeing": pick(["medium", "strong"]),
-            "board_independence": pick(["33_50", ">=50"]),
-            "anti_corruption": pick(["medium", "strong"]),
-            "esg_oversight": pick(["csr_dept", "board_committee"]),
-            "exec_comp_esg": pick(["<20", ">=20"]),
-            "transparency_csrd": pick(["partial", "full"]),
-            "risk_governance": pick(["medium", "strong"]),
-            "audit_quality": pick(["medium", "strong"]),
-            "whistleblower": pick(["medium", "strong"]),
-            "cyber_governance": pick(["medium", "strong"]),
-        }
-
-    def _mc_band(self, final_score: float, bank: str) -> Dict[str, float]:
-        """Simple deterministic Monte-Carlo style band for UI."""
-        seed = int(hashlib.sha256(f"{bank}-mc".encode()).hexdigest(), 16) % (2**32)
-        rng = random.Random(seed)
-        noise = lambda scale: rng.uniform(-scale, scale)
-        base = float(final_score)
-        p50 = max(0.0, min(100.0, base + noise(2.0)))
-        p05 = max(0.0, min(100.0, base - 8 + noise(3.0)))
-        p95 = max(0.0, min(100.0, base + 8 + noise(3.0)))
-        mean = (p05 + p50 + p95) / 3.0
-        return {"mean": mean, "p05": p05, "p50": p50, "p95": p95}
-
-    # Public API
     def analyze_bank(
         self,
         bank: str,
         question: Optional[str] = None,
-        year: Optional[str] = None,
         pdf_text: Optional[str] = None,
         pdf_filename: Optional[str] = None,
-        mode: str = "single",
-    ) -> Dict[str, object]:
-        """
-        Full ESG pipeline for one bank. Returns a dict with ok flag and payload for UI.
-        """
-        print(f"[Server] Running analysis for {bank} ({year or 'latest'})...")
+    ) -> Dict[str, Any]:
+        """Full analysis for one bank: scores, optional context, optional AI assistant."""
+        cache_key = f"{bank}:{self._hash(question)}:{self._hash(pdf_text)}"
+        if cache_key in self.cache:
+            return copy.deepcopy(self.cache[cache_key])
 
-        cache_key = self._cache_key(mode=mode, bank=bank, question=question)
-        cached = self.cache.get(cache_key)
-        if cached is not None:
-            return copy.deepcopy(cached)
+        scored = self.score_bank(bank)
 
-        yahoo_snapshot = self.yahoo.lookup_and_snapshot(bank)
-        news_items_raw, news_summary = self._fetch_news(bank)
-        raw_pdf_text = self._fetch_pdf_text(bank, year, pdf_text)
-        pdf_summary = self._summarise_pdf(raw_pdf_text, bank, year)
+        news_items: List[Dict[str, str]] = []
+        yahoo_snapshot = ""
+        if self.fetch_external:
+            yahoo_snapshot = self._safe(lambda: self.yahoo.lookup_and_snapshot(bank), "", "Yahoo snapshot")
+            news_items = self._safe(lambda: self.news_client.search(bank, limit=10), [], "News fetch")
 
-        context_blob = self._build_context_blob(
-            yahoo_snapshot=yahoo_snapshot,
-            news_summary=news_summary,
-            pdf_summary=pdf_summary,
-            year=year,
-            question=question,
-        )
-
-        used_fallback = False
-        categories: Dict[str, Any] = {}
-        analysis_text = ""
-        scores: Dict[str, Any] = {}
-        llm_error: Optional[str] = None
-
-        try:
-            esg_output = self.esg_agent.run(
-                bank=bank,
-                year=year,
-                question=question,
-                context_blob=context_blob,
-            )
-            categories = esg_output.get("categories", {}) or {}
-            analysis_text = esg_output.get("analysis_text", "") or ""
-            scores = esg_output.get("scores", {}) or {}
-
-            if (not scores.get("sub_scores")) and categories:
-                try:
-                    auto_scores = self.score_engine.from_categories(categories, bank=bank)
-                    if not scores.get("sub_scores"):
-                        scores["sub_scores"] = auto_scores.get("sub_scores", {})
-                    if not scores.get("pillar_scores"):
-                        scores["pillar_scores"] = auto_scores.get("pillar_scores", {})
-                    if not scores.get("final"):
-                        scores["final"] = auto_scores.get("final", 0.0)
-                except Exception as patch_exc:
-                    print(f"[Server] Failed to rebuild scores from categories for {bank}: {patch_exc}")
-            # ------ 新增补丁结束 ------
-
-        except Exception as exc:
-            llm_error = str(exc)
-            used_fallback = True
-            categories = self._fallback_categories(bank)
-            scores = self.score_engine.from_categories(categories, bank=bank)
-            analysis_text = (
-                "LLM unavailable; generated deterministic fallback analysis based on public signals "
-                "and rubric defaults."
-            )
-
-        # Enrich scores with MC band for UI
-        scores["mc"] = self._mc_band(scores.get("final", 0), bank)
-
-        # Final report
-        try:
-            final_report = self.writer.run(
-                bank=bank,
-                analysis_text=analysis_text,
-                scores=scores,
-                news_summary=news_summary,
-            )
-        except Exception as exc:
-            final_report = f"_Failed to generate report: {exc}_"
+        if self.use_llm:
+            assistant = self._run_assistant(bank, question, pdf_text, news_items, yahoo_snapshot, scored)
+        else:
+            assistant = {"enabled": False}
 
         result = {
             "ok": True,
             "bank": bank,
-            "analysis_text": analysis_text,
-            "categories": categories,
-            "scores": scores,
-            "news_summary": news_summary,
-            "pdf_summary": pdf_summary,
-            "final_report": final_report,
-            "sources": self._format_sources(news_items_raw, raw_pdf_text),
-            "news": {"items": self._news_items_for_ui(news_items_raw), "query": bank},
-            "yahoo": self._yahoo_snapshot_struct(yahoo_snapshot, bank),
-            "raw": {
-                "used_fallback_from_yahoo": used_fallback,
-                "llm_error": llm_error,
-                "pdf_filename": pdf_filename,
-            },
+            "reporting_year": REPORTING_YEAR,
+            **scored,
+            "assistant": assistant,
+            "news": {"items": self._news_items_for_ui(news_items), "query": bank},
+            "yahoo": {"ok": bool(yahoo_snapshot), "snapshot": yahoo_snapshot},
+            "pdf_filename": pdf_filename,
         }
         self.cache[cache_key] = copy.deepcopy(result)
         return result
 
-    def compare_banks(
-        self,
-        banks: List[str],
-        year: Optional[str] = None,
-        pdf_texts: Optional[Dict[str, str]] = None,
-        comparison_question: Optional[str] = None,
-    ) -> Dict[str, object]:
-        results: Dict[str, Dict[str, Any]] = {}
+    def compare_banks(self, banks: List[str]) -> Dict[str, Any]:
+        """Rank banks by their evidence-based scores (offline and deterministic)."""
         per_bank: Dict[str, Dict[str, Any]] = {}
         errors: Dict[str, str] = {}
-
         for bank in banks:
             try:
-                result = self.analyze_bank(
-                    bank=bank,
-                    question=comparison_question,
-                    year=year,
-                    pdf_text=(pdf_texts or {}).get(bank),
-                    pdf_filename=None,
-                    mode="compare",
-                )
-                per_bank[bank] = result
-                if result.get("ok"):
-                    results[bank] = result.get("scores", {})
-                else:
-                    errors[bank] = str(result.get("error", "unknown error"))
+                per_bank[bank] = self.score_bank(bank)
             except Exception as exc:
                 errors[bank] = str(exc)
 
-        # Simple textual summary
-        ordered = sorted(results.items(), key=lambda kv: kv[1].get("final", 0), reverse=True)
-        summary_lines = ["Comparison summary (deterministic if LLM unavailable):"]
-        for bank, sc in ordered:
-            summary_lines.append(
-                f"- {bank}: Final={sc.get('final', 'N/A')} (E={sc.get('E')}, S={sc.get('S')}, G={sc.get('G')})"
+        # Highest final score first; ties broken by name so the order is stable.
+        ranking = sorted(per_bank, key=lambda b: (-per_bank[b]["scores"]["final"], b))
+        lines = [f"Ranking by final score ({REPORTING_YEAR} evidence):"]
+        for i, bank in enumerate(ranking, start=1):
+            sc = per_bank[bank]["scores"]
+            p = sc["pillars"]
+            lines.append(
+                f"{i}. {bank}: {sc['final']} ({sc['label']}) - E {p['E']}, S {p['S']}, G {p['G']}, "
+                f"controversy {sc['controversy']} (-{sc['controversy_deduction']:g})"
             )
-        comparison_summary = "\n".join(summary_lines)
 
         return {
             "ok": True,
-            "results": results,
+            "ranking": ranking,
             "per_bank_results": per_bank,
             "errors": errors,
-            "comparison_summary": comparison_summary,
+            "comparison_summary": "\n".join(lines),
         }
+
+    # AI assistant (advisory only)
+    def _run_assistant(
+        self,
+        bank: str,
+        question: Optional[str],
+        pdf_text: Optional[str],
+        news_items: List[Dict[str, str]],
+        yahoo_snapshot: str,
+        scored: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        out: Dict[str, Any] = {
+            "enabled": True,
+            "error": None,
+            "news_summary": "",
+            "pdf_summary": "",
+            "analysis_text": "",
+            "suggestions": [],
+            "rejected": {},
+            "report": "",
+        }
+        try:
+            if news_items:
+                out["news_summary"] = self.news_agent.summarise(bank, news_items)
+            report_text = pdf_text or fetch_official_pdf(self.evidence, bank)
+            if report_text:
+                out["pdf_summary"] = self.pdf_summarizer.summarize(report_text, bank=bank, year=REPORTING_YEAR)
+
+            context = self._build_context_blob(yahoo_snapshot, out["news_summary"], out["pdf_summary"], question)
+            esg = self.esg_agent.run(bank=bank, question=question, context_blob=context)
+            out["analysis_text"] = esg["analysis_text"]
+            out["rejected"] = esg["rejected"]
+
+            evidence_categories = self.evidence.categories(bank)
+            for key in ALL_KEYS:
+                suggestion = esg["suggestions"].get(key)
+                out["suggestions"].append(
+                    {
+                        "indicator": key,
+                        "label": RUBRIC_BY_KEY[key].label if key in RUBRIC_BY_KEY else "Controversy",
+                        "evidence_category": evidence_categories[key],
+                        "ai_suggestion": suggestion,
+                        "agrees": suggestion == evidence_categories[key],
+                    }
+                )
+
+            out["report"] = self.writer.run(
+                bank=bank,
+                scores=scored["scores"],
+                breakdown=scored["breakdown"],
+                news_summary=out["news_summary"],
+            )
+        except Exception as exc:  # the assistant is optional; scores are unaffected
+            out["error"] = str(exc)
+        return out
+
+    # Helpers
+    @staticmethod
+    def _hash(text: Optional[str]) -> str:
+        text = (text or "").strip()
+        return hashlib.sha256(text.encode()).hexdigest()[:12] if text else "none"
+
+    @staticmethod
+    def _safe(fn: Callable[[], T], default: T, what: str) -> T:
+        try:
+            return fn()
+        except Exception as exc:  # network sources are optional context
+            print(f"[Server] {what} failed: {exc}")
+            return default
+
+    @staticmethod
+    def _build_context_blob(
+        yahoo_snapshot: str,
+        news_summary: str,
+        pdf_summary: str,
+        question: Optional[str],
+    ) -> str:
+        focus = f"Focus question: {question}\n\n" if question else ""
+        return (
+            f"Assessment period: {REPORTING_YEAR}\n"
+            f"{focus}"
+            f"--- Yahoo Snapshot ---\n{yahoo_snapshot or 'N/A'}\n\n"
+            f"--- ESG News Summary ---\n{news_summary or 'N/A'}\n\n"
+            f"--- Annual Report Summary ---\n{pdf_summary or 'N/A'}\n"
+        )
+
+    @staticmethod
+    def _news_items_for_ui(items: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        return [
+            {
+                "headline": it.get("title") or "",
+                "url": it.get("link") or "",
+                "source": it.get("source") or "",
+                "published": it.get("published") or "",
+            }
+            for it in items
+        ]

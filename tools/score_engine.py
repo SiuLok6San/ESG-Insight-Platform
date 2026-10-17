@@ -1,212 +1,240 @@
+"""Deterministic, evidence-based ESG scoring.
+
+Scores are computed only from rubric categories (one per indicator), which
+come from the reviewed evidence table in ``data/evidence/esg_evidence.csv``.
+The mapping from category to score is a fixed lookup table: there is no
+randomness and no LLM input anywhere in this module.
+
+Model
+-----
+- 14 rubric indicators, grouped into three pillars (E, S, G). Each pillar
+  score is the weighted average of its indicator scores (0-100).
+- The weighted score combines the pillars (default 35% E / 30% S / 35% G).
+- A controversy adjustment is subtracted from the weighted score.
+- The final score is clamped to 0-100 and rounded to one decimal, and the
+  compliance label is assigned from that rounded value.
+
+Category definitions are documented in ``data/evidence/category_definitions.md``.
+"""
+
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Tuple
+from dataclasses import asdict, dataclass, field
+from decimal import ROUND_HALF_UP, Decimal
+from typing import Dict, List, Mapping, Tuple
+
+NOT_DISCLOSED = "not_disclosed"
+PILLARS: Tuple[str, ...] = ("E", "S", "G")
+PILLAR_NAMES: Dict[str, str] = {"E": "Environmental", "S": "Social", "G": "Governance"}
 
 
-@dataclass
+@dataclass(frozen=True)
+class Indicator:
+    """One rubric indicator: its pillar, weight within the pillar, and the
+    score for each allowed category (listed from weakest to strongest)."""
+
+    key: str
+    pillar: str
+    label: str
+    weight: float
+    scores: Mapping[str, int]
+
+    @property
+    def categories(self) -> Tuple[str, ...]:
+        return tuple(self.scores)
+
+    def score(self, category: str) -> int:
+        """Score for a category; ``not_disclosed`` gets the lowest score."""
+        if category == NOT_DISCLOSED:
+            return min(self.scores.values())
+        if category not in self.scores:
+            raise ValueError(
+                f"Invalid category {category!r} for indicator {self.key!r}; "
+                f"allowed: {', '.join(self.categories)} or {NOT_DISCLOSED}"
+            )
+        return self.scores[category]
+
+
+RUBRIC: Tuple[Indicator, ...] = (
+    # Environmental
+    Indicator("climate_plan", "E", "Climate transition plan", 0.20,
+              {"none": 10, "weak": 40, "science_based": 75, "sbt_aligned": 90}),
+    Indicator("emission_disclosure", "E", "Emissions disclosure", 0.20,
+              {"none": 5, "scope1": 40, "scope1_2": 70, "scope1_2_3": 90}),
+    Indicator("financed_emissions", "E", "Financed emissions", 0.20,
+              {"none": 10, "partial": 60, "pcaf_full": 85}),
+    Indicator("taxonomy_alignment", "E", "EU Taxonomy alignment", 0.15,
+              {"none": 20, "low": 45, "medium": 65, "high": 80, "aligned": 90}),
+    Indicator("risk_management", "E", "Climate risk management", 0.15,
+              {"none": 20, "weak": 45, "partial": 60, "full": 75, "strong": 90}),
+    Indicator("fossil_policy", "E", "Fossil fuel policy", 0.10,
+              {"none": 20, "weak": 40, "partial": 60, "strong": 80, "exit": 90}),
+    # Social
+    Indicator("diversity_inclusion", "S", "Diversity & inclusion", 0.25,
+              {"none": 20, "partial": 55, "full": 80}),
+    Indicator("labor_rights", "S", "Labour rights", 0.25,
+              {"none": 20, "weak": 45, "medium": 65, "strong": 85}),
+    Indicator("customer_protection", "S", "Customer protection", 0.25,
+              {"fined": 30, "building": 60, "mature": 80}),
+    Indicator("aml_maturity", "S", "AML maturity", 0.25,
+              {"fined": 25, "weak": 40, "building": 60, "mature": 75, "leading": 90}),
+    # Governance
+    Indicator("board_independence", "G", "Board independence", 0.25,
+              {"<33": 45, "33_50": 65, ">=50": 80}),
+    Indicator("esg_oversight", "G", "ESG oversight", 0.25,
+              {"none": 30, "csr_dept": 60, "board_committee": 80}),
+    Indicator("exec_comp_esg", "G", "ESG-linked executive pay", 0.25,
+              {"none": 40, "<20": 60, ">=20": 80}),
+    Indicator("transparency_csrd", "G", "CSRD transparency", 0.25,
+              {"non_compliant": 30, "partial": 60, "full": 80}),
+)
+RUBRIC_BY_KEY: Dict[str, Indicator] = {ind.key: ind for ind in RUBRIC}
+
+CONTROVERSY_KEY = "controversy"
+# Points subtracted from the weighted E/S/G score.
+CONTROVERSY_DEDUCTION: Dict[str, float] = {"none": 0.0, "moderate": 2.0, "severe": 5.0}
+
+# Compliance label thresholds, checked from the top down.
+LABEL_THRESHOLDS: Tuple[Tuple[float, str], ...] = ((75.0, "Meet"), (50.0, "Almost Meet"))
+LOWEST_LABEL = "Not Meet"
+
+ALL_KEYS: Tuple[str, ...] = tuple(ind.key for ind in RUBRIC) + (CONTROVERSY_KEY,)
+
+
+def allowed_categories(key: str) -> Tuple[str, ...]:
+    """Allowed categories for any evidence-table key, including ``not_disclosed``."""
+    if key == CONTROVERSY_KEY:
+        return tuple(CONTROVERSY_DEDUCTION) + (NOT_DISCLOSED,)
+    if key not in RUBRIC_BY_KEY:
+        raise KeyError(f"Unknown indicator {key!r}")
+    return RUBRIC_BY_KEY[key].categories + (NOT_DISCLOSED,)
+
+
+def controversy_deduction(category: str) -> float:
+    """Points subtracted for a controversy category; ``not_disclosed`` gets the largest."""
+    if category == NOT_DISCLOSED:
+        return max(CONTROVERSY_DEDUCTION.values())
+    if category not in CONTROVERSY_DEDUCTION:
+        raise ValueError(
+            f"Invalid controversy category {category!r}; allowed: "
+            f"{', '.join(CONTROVERSY_DEDUCTION)} or {NOT_DISCLOSED}"
+        )
+    return CONTROVERSY_DEDUCTION[category]
+
+
+def round1(value: float) -> float:
+    """Round to one decimal, halves away from zero (84.25 -> 84.3)."""
+    return float(Decimal(repr(value)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def compliance_label(final_score: float) -> str:
+    for threshold, label in LABEL_THRESHOLDS:
+        if final_score >= threshold:
+            return label
+    return LOWEST_LABEL
+
+
+@dataclass(frozen=True)
 class ScoreEngineConfig:
-    # pillar weights (35/30/35)
+    """Pillar weights (default 35/30/35). They must sum to 1."""
+
     w_E: float = 0.35
     w_S: float = 0.30
     w_G: float = 0.35
 
+    def __post_init__(self) -> None:
+        weights = (self.w_E, self.w_S, self.w_G)
+        if any(w < 0 for w in weights) or abs(sum(weights) - 1.0) > 1e-9:
+            raise ValueError(f"Pillar weights must be non-negative and sum to 1, got {weights}")
+
+    def weight(self, pillar: str) -> float:
+        return {"E": self.w_E, "S": self.w_S, "G": self.w_G}[pillar]
+
+
+@dataclass(frozen=True)
+class IndicatorScore:
+    key: str
+    pillar: str
+    label: str
+    weight: float
+    category: str
+    score: int
+    not_disclosed: bool
+
+
+@dataclass(frozen=True)
+class BankScore:
+    bank: str
+    pillars: Dict[str, float]  # exact pillar scores
+    weighted: float  # weighted E/S/G score before the controversy adjustment
+    controversy: str
+    controversy_deduction: float
+    final: float  # clamped and rounded to one decimal
+    label: str
+    indicators: List[IndicatorScore] = field(default_factory=list)
+    engine_version: str = ""
+
+    def to_dict(self) -> Dict[str, object]:
+        data = asdict(self)
+        data["pillars"] = {p: round1(v) for p, v in self.pillars.items()}
+        data["weighted"] = round1(self.weighted)
+        return data
+
 
 class ScoreEngine:
-    VERSION = "v3.0-hybrid"
+    """Turns one bank's rubric categories into pillar scores, a final score and a label."""
+
+    VERSION = "v4.0-evidence"
 
     def __init__(self, cfg: ScoreEngineConfig | None = None) -> None:
         self.cfg = cfg or ScoreEngineConfig()
 
-    # Helpers
-    @staticmethod
-    def _safe_str(x: Any) -> str:
-        if x is None:
-            return ""
-        return str(x).strip()
+    def score(self, categories: Mapping[str, str], bank: str = "") -> BankScore:
+        """Score one bank.
 
-    @staticmethod
-    def _clamp(x: float, lo: float = 0.0, hi: float = 100.0) -> float:
-        if x < lo:
-            return lo
-        if x > hi:
-            return hi
-        return x
+        ``categories`` must contain exactly one category for each rubric
+        indicator plus ``controversy``. Missing, unknown or invalid entries
+        raise ``ValueError``: nothing is filled in silently.
+        """
+        missing = [k for k in ALL_KEYS if k not in categories]
+        unknown = [k for k in categories if k not in ALL_KEYS]
+        if missing or unknown:
+            raise ValueError(f"{bank or 'bank'}: missing indicators {missing}, unknown keys {unknown}")
 
-    @staticmethod
-    def _weighted_avg(items: Tuple[Tuple[float, float], ...]) -> float:
-        """items = ((score, weight), ...)"""
-        den = sum(w for _, w in items)
-        if den <= 0:
-            return 0.0
-        num = sum(s * w for s, w in items)
-        return num / den
+        indicators: List[IndicatorScore] = []
+        for ind in RUBRIC:
+            category = categories[ind.key]
+            indicators.append(
+                IndicatorScore(
+                    key=ind.key,
+                    pillar=ind.pillar,
+                    label=ind.label,
+                    weight=ind.weight,
+                    category=category,
+                    score=ind.score(category),
+                    not_disclosed=category == NOT_DISCLOSED,
+                )
+            )
 
-    # Mapping Logic (Used for Fallback / Rubric mode)
-    def _map_env(self, cats: Dict[str, str]) -> Dict[str, float]:
-        climate_plan = self._safe_str(cats.get("climate_plan"))
-        emission_disclosure = self._safe_str(cats.get("emission_disclosure"))
-        financed_emissions = self._safe_str(cats.get("financed_emissions"))
-        taxonomy_alignment = self._safe_str(cats.get("taxonomy_alignment"))
-        risk_management = self._safe_str(cats.get("risk_management"))
+        pillars: Dict[str, float] = {}
+        for pillar in PILLARS:
+            items = [i for i in indicators if i.pillar == pillar]
+            total_weight = sum(i.weight for i in items)
+            pillars[pillar] = sum(i.score * i.weight for i in items) / total_weight
 
-        # Fallback values
-        climate_plan_score = {"none": 10, "weak": 40, "science_based": 75, "sbt_aligned": 90}.get(climate_plan, 40)
-        emission_score = {"none": 5, "scope1": 40, "scope1_2": 70, "scope1_2_3": 90}.get(emission_disclosure, 40)
-        financed_emissions_score = {"none": 10, "partial": 60, "pcaf_full": 85}.get(financed_emissions, 60)
-        taxonomy_score = {"none": 20, "low": 45, "medium": 65, "high": 80, "aligned": 90}.get(taxonomy_alignment, 45)
-        risk_mgmt_score = {"none": 20, "weak": 45, "partial": 60, "full": 75, "strong": 90}.get(risk_management, 60)
+        weighted = sum(self.cfg.weight(p) * pillars[p] for p in PILLARS)
+        controversy = categories[CONTROVERSY_KEY]
+        deduction = controversy_deduction(controversy)
+        final = round1(min(100.0, max(0.0, weighted - deduction)))
 
-        # Optional extras
-        fossil_policy = self._safe_str(cats.get("fossil_policy"))
-        fossil_score = {"none": 20, "weak": 40, "partial": 60, "strong": 80, "exit": 90}.get(fossil_policy, 60)
-
-        sub_items = (
-            (climate_plan_score, 0.20),
-            (emission_score, 0.20),
-            (financed_emissions_score, 0.20),
-            (taxonomy_score, 0.15),
-            (risk_mgmt_score, 0.15),
-            (fossil_score, 0.10),
+        return BankScore(
+            bank=bank,
+            pillars=pillars,
+            weighted=weighted,
+            controversy=controversy,
+            controversy_deduction=deduction,
+            final=final,
+            label=compliance_label(final),
+            indicators=indicators,
+            engine_version=self.VERSION,
         )
-        E = self._clamp(self._weighted_avg(sub_items))
-
-        env_sub = {
-            "Climate transition plan": climate_plan_score,
-            "Emissions disclosure": emission_score,
-            "Financed emissions": financed_emissions_score,
-            "EU Taxonomy alignment": taxonomy_score,
-            "Risk management": risk_mgmt_score,
-            "Fossil policy": fossil_score,
-        }
-        return {"E": E, "env_sub": env_sub}
-
-    def _map_soc(self, cats: Dict[str, str]) -> Dict[str, float]:
-        diversity = self._safe_str(cats.get("diversity_inclusion"))
-        labor = self._safe_str(cats.get("labor_rights"))
-        customer = self._safe_str(cats.get("customer_protection"))
-        aml = self._safe_str(cats.get("aml_maturity"))
-
-        di_score = {"none": 20, "partial": 55, "full": 80}.get(diversity, 55)
-        labor_score = {"none": 20, "weak": 45, "medium": 65, "strong": 85}.get(labor, 65)
-        cust_score = {"fined": 30, "building": 60, "mature": 80}.get(customer, 60)
-        aml_score = {"fined": 25, "weak": 40, "building": 60, "mature": 75, "leading": 90}.get(aml, 60)
-
-        sub_items = ((di_score, 0.25), (labor_score, 0.25), (cust_score, 0.25), (aml_score, 0.25))
-        S = self._clamp(self._weighted_avg(sub_items))
-
-        soc_sub = {
-            "Diversity & Inclusion": di_score,
-            "Labor Rights": labor_score,
-            "Customer Protection": cust_score,
-            "AML Maturity": aml_score,
-        }
-        return {"S": S, "soc_sub": soc_sub}
-
-    def _map_gov(self, cats: Dict[str, str]) -> Dict[str, float]:
-        board = self._safe_str(cats.get("board_independence"))
-        oversight = self._safe_str(cats.get("esg_oversight"))
-        comp = self._safe_str(cats.get("exec_comp_esg"))
-        transparency = self._safe_str(cats.get("transparency_csrd"))
-
-        board_score = {"<33": 45, "33_50": 65, ">=50": 80}.get(board, 65)
-        oversight_score = {"none": 30, "csr_dept": 60, "board_committee": 80}.get(oversight, 60)
-        comp_score = {"none": 40, "<20": 60, ">=20": 80}.get(comp, 60)
-        trans_score = {"non_compliant": 30, "partial": 60, "full": 80}.get(transparency, 60)
-
-        sub_items = ((board_score, 0.25), (oversight_score, 0.25), (comp_score, 0.25), (trans_score, 0.25))
-        G = self._clamp(self._weighted_avg(sub_items))
-
-        gov_sub = {
-            "Board Independence": board_score,
-            "ESG Oversight": oversight_score,
-            "Executive Comp": comp_score,
-            "CSRD Transparency": trans_score,
-        }
-        return {"G": G, "gov_sub": gov_sub}
-
-    # MAIN ENTRY POINT
-    def from_categories(self, cats: Dict[str, Any], bank: str | None = None) -> Dict[str, Any]:
-        """
-        Smart entry point:
-        1. Checks if input is DIRECT SCORES from LLM (Integers E/S/G).
-        2. If not, falls back to RUBRIC MAPPING (Strings -> Integers).
-        """
-        cats = cats or {}
-
-        # --- PATH A: DIRECT LLM SCORES ---
-        # If the LLM returned specific numeric keys, trust them.
-        # Check if "E" exists and is a number/numeric-string
-        has_direct_scores = False
-        try:
-            if "E" in cats and "S" in cats and "G" in cats:
-                # Basic check to see if they look like numbers
-                float(cats["E"])
-                has_direct_scores = True
-        except:
-            has_direct_scores = False
-
-        if has_direct_scores:
-            E = float(cats["E"])
-            S = float(cats["S"])
-            G = float(cats["G"])
-            
-            # Recalculate Final to ensure math consistency (35/30/35)
-            final = self.cfg.w_E * E + self.cfg.w_S * S + self.cfg.w_G * G
-            
-            # Generate PLACEHOLDER sub-scores so the UI table isn't empty
-            env_sub = {"Aggregate LLM Environmental Score": int(E)}
-            soc_sub = {"Aggregate LLM Social Score": int(S)}
-            gov_sub = {"Aggregate LLM Governance Score": int(G)}
-
-            # Also check if LLM provided extra context like controversy
-            controversy = float(cats.get("Controversy", 0))
-            
-            if controversy > 50:
-                final = final - (controversy * 0.1)
-
-        else:
-            # --- PATH B: RUBRIC CALCULATION (Fallback / Old Prompt) ---
-            # Map strings (weak/strong) to numbers
-            env_res = self._map_env(cats)
-            soc_res = self._map_soc(cats)
-            gov_res = self._map_gov(cats)
-
-            E = env_res["E"]
-            S = soc_res["S"]
-            G = gov_res["G"]
-            
-            env_sub = env_res["env_sub"]
-            soc_sub = soc_res["soc_sub"]
-            gov_sub = gov_res["gov_sub"]
-
-            final = self.cfg.w_E * E + self.cfg.w_S * S + self.cfg.w_G * G
-
-        # --- Final Formatting ---
-        final = float(self._clamp(final))
-        
-        if final >= 75:
-            label = "Meet"
-        elif final >= 50:
-            label = "Almost Meet"
-        else:
-            label = "Not Meet"
-
-        sub_scores = {
-            "E": {k: int(round(v)) for k, v in env_sub.items()},
-            "S": {k: int(round(v)) for k, v in soc_sub.items()},
-            "G": {k: int(round(v)) for k, v in gov_sub.items()},
-        }
-
-        result = {
-            "E": int(round(E)),
-            "S": int(round(S)),
-            "G": int(round(G)),
-            "final": int(round(final)),
-            "FINAL": int(round(final)),
-            "label": label,
-            "pillar_scores": {"E": int(round(E)), "S": int(round(S)), "G": int(round(G))},
-            "sub_scores": sub_scores,
-            "engine_version": self.VERSION,
-        }
-        return result

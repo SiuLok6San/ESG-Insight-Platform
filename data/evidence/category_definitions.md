@@ -55,29 +55,48 @@ applied to every bank. Rows are proposed as `draft` and only become
 | `exec_comp_esg` | 25% | `none`=40, `<20`=60, `>=20`=80 | Weight of explicitly environmental and social (sustainability) targets in the CEO's variable-remuneration scorecard. |
 | `transparency_csrd` | 25% | `non_compliant`=30, `partial`=60, `full`=80 | `full`: sustainability statement prepared under ESRS with an external assurance conclusion. `partial`: ESRS applied only in part, or no external assurance. `non_compliant`: no CSRD/ESRS reporting. |
 
-## Controversy (approved 2026-10-17; not yet in `score_engine.py`)
+## Controversy adjustment (approved 2026-10-17)
 
-One row per bank, indicator `controversy`. The score adjustment will be
-designed in Phase 3.
+One row per bank, indicator `controversy`. It is not a pillar: its deduction
+is subtracted from the weighted E/S/G score to give the final score.
 
-| Category | Definition |
-|---|---|
-| `none` | No ESG-related legal or regulatory proceedings disclosed for the reporting year. |
-| `moderate` | ESG-related litigation, criminal proceedings or customer remediation ongoing in the reporting year, without a new fine or settlement. |
-| `severe` | A new ESG-related fine, settlement or conviction in the reporting year. |
+| Category | Definition | Deduction |
+|---|---|---|
+| `none` | No ESG-related legal or regulatory proceedings disclosed for the reporting year. | 0 |
+| `moderate` | ESG-related litigation, criminal proceedings or customer remediation ongoing in the reporting year, without a new fine or settlement. | −2 |
+| `severe` | A new ESG-related fine, settlement or conviction in the reporting year. | −5 |
 
 ESG-related means: climate or environment, financial crime (AML, sanctions,
 corruption), customer harm, or human rights. The source is the bank's own
-legal-proceedings note in the annual report.
+legal-proceedings note in the annual report. `not_disclosed` takes the
+largest deduction (−5).
+
+**No double counting:** when assigning `controversy`, ignore any event that
+already set `aml_maturity` or `customer_protection` to `fined`. That event is
+already penalised in the Social pillar.
+
+## Final score and compliance label
+
+```
+final = 0.35 × E + 0.30 × S + 0.35 × G − controversy deduction
+```
+
+The final score is clamped to 0–100 and rounded to one decimal. The
+compliance label is assigned from that rounded value, so the displayed score
+and the label always agree:
+
+| Final score | Label |
+|---|---|
+| ≥ 75 | Meet |
+| 50 – 74.9 | Almost Meet |
+| < 50 | Not Meet |
 
 ## Open questions for review
 
-Resolved: the GAR thresholds and the controversy categories were approved
-on 2026-10-17. The EU does not define GAR bands, so the thresholds remain an
-analyst convention.
+Resolved on 2026-10-17: the GAR thresholds, the controversy categories and
+deductions, and the double-counting rule. The EU does not define GAR bands,
+so the thresholds remain an analyst convention.
 
 1. **`not_disclosed` = lowest score** means a bank that does not report on
    customer protection scores the same as a bank that was fined (`fined`=30).
-2. **Double counting:** an AML fine would lower both `aml_maturity` and
-   `controversy`. Phase 3 should decide whether the controversy adjustment
-   excludes events already captured by a `fined` category.
+   No confirmed row currently uses `not_disclosed`.
