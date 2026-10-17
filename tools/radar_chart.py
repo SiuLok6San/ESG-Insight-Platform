@@ -1,3 +1,7 @@
+import matplotlib
+
+matplotlib.use("Agg")  # no GUI backend: charts are rendered inside the Streamlit server
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -33,27 +37,25 @@ def create_esg_radar_chart(
     values += values[:1]
     angles += angles[:1]
 
-       # 👇 尺寸改成“瘦长型”：竖直稍微高一点，方便截屏贴 PPT
-    fig, ax = plt.subplots(figsize=(2,2), subplot_kw=dict(polar=True))
+    # Compact square figure that fits a Streamlit column
+    fig, ax = plt.subplots(figsize=(2.6, 2.6), subplot_kw=dict(polar=True))
 
-    ax.plot(angles, values, linewidth=1.3, color="#1f77b4")
-    ax.fill(angles, values, alpha=0.25, color="#1f77b4")
+    ax.plot(angles, values, linewidth=1.3, color="#2a78d6")
+    ax.fill(angles, values, alpha=0.25, color="#2a78d6")
 
     ax.set_xticks(angles[:-1])
-    # 字体再缩小一点
+    # Small fonts keep the chart compact
     ax.set_xticklabels(labels, fontsize=8)
 
     ax.set_yticks([20, 40, 60, 80, 100])
     ax.set_ylim(0, 100)
-    # y 轴刻度也更小，整体显得更紧凑
+    # Smaller radial tick labels
     ax.tick_params(axis="y", labelsize=6)
 
-    # 标题紧凑一点，避免占太多高度
+    # Tight title to save vertical space
     ax.set_title(f"{bank_name}", fontsize=9, pad=3, y=1.03)
 
     plt.tight_layout()
-
-
     return fig
 
 

@@ -7,7 +7,8 @@ from typing import Any, List, Optional
 class PDFSummarizer:
     llm: Any
     max_chars_per_chunk: int = 8000
-    max_chunks: int = 3
+    # Enough for the ~15 cited pages of one report; longer uploads are truncated.
+    max_chunks: int = 16
 
     def _split_into_chunks(self, text: str) -> List[str]:
         text = text.replace("\r", "\n")
@@ -76,7 +77,7 @@ Return a concise markdown bullet list (max ~300 words).
 RAW PDF TEXT:
 {chunks[0]}
 """
-            return self.llm.ask(prompt, bank_name=bank, question=None, pdf_text=raw_text)
+            return self.llm.ask(prompt)
 
         # Multi-chunk: summarise each chunk first, then summarise the summaries
         partial_summaries: List[str] = []
@@ -94,7 +95,7 @@ Summarise ONLY ESG-relevant content as bullet points (max ~150 words).
 CHUNK TEXT:
 {ch}
 """
-            partial = self.llm.ask(prompt, bank_name=bank, question=None, pdf_text=ch)
+            partial = self.llm.ask(prompt)
             partial_summaries.append(partial.strip())
 
         joined = "\n\n".join(partial_summaries)
@@ -115,4 +116,4 @@ regulatory alignment. Max ~350 words.
 PARTIAL BULLETS:
 {joined}
 """
-        return self.llm.ask(final_prompt, bank_name=bank, question=None, pdf_text=joined)
+        return self.llm.ask(final_prompt)

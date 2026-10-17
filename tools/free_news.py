@@ -1,10 +1,19 @@
 from __future__ import annotations
 
-import feedparser
-from typing import List, Dict
-import html
-import re
 import datetime
+import html
+import logging
+import re
+from concurrent.futures import ThreadPoolExecutor
+from typing import Dict, List
+
+import feedparser
+import requests
+
+logger = logging.getLogger(__name__)
+
+RSS_URL = "https://news.google.com/rss/search"
+TIMEOUT_S = 10
 
 
 class FreeNewsClient:
@@ -13,6 +22,9 @@ class FreeNewsClient:
     def search(self, bank: str, limit: int = 10) -> List[Dict[str, str]]:
         """
         Search Google News RSS for ESG-related articles about the bank.
+
+        The queries run in parallel, each with a timeout, so a slow feed
+        cannot block the app. Results keep the query order.
 
         Returns a list of dicts:
         [
@@ -26,13 +38,12 @@ class FreeNewsClient:
         ]
         """
         queries = self._build_queries(bank)
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            feeds = list(pool.map(self._fetch_feed, queries))
+
         results = []
-
-        for q in queries:
-            url = f"https://news.google.com/rss/search?q={q.replace(' ', '+')}&hl=en-US&gl=US&ceid=US:en"
-            feed = feedparser.parse(url)
-
-            for entry in feed.entries:
+        for entries in feeds:
+            for entry in entries:
                 item = self._parse_entry(entry)
                 if item:
                     results.append(item)
@@ -43,11 +54,20 @@ class FreeNewsClient:
         # Limit size
         return unique[:limit]
 
+    def _fetch_feed(self, query: str) -> list:
+        """Entries of one RSS query, or an empty list on any network error."""
+        params = {"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"}
+        try:
+            resp = requests.get(RSS_URL, params=params, timeout=TIMEOUT_S)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning("[FreeNews] Query %r failed: %s", query, exc)
+            return []
+        return feedparser.parse(resp.content).entries
+
     # Internal Helpers
     def _build_queries(self, bank: str) -> List[str]:
         """Build multi-keyword Google News search queries."""
-        base = [bank]
-
         esg_terms = [
             "ESG",
             "sustainability",
