@@ -15,6 +15,7 @@ from tools.local_llm import LocalLLM
 from tools.pdf_fetcher import fetch_official_pdf
 from tools.pdf_summarizer import PDFSummarizer
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
+from tools.sensitivity import run_sensitivity
 from tools.yahoo_client import YahooFinanceClient
 
 T = TypeVar("T")
@@ -161,6 +162,13 @@ class Server:
             "errors": errors,
             "comparison_summary": "\n".join(lines),
         }
+
+    def sensitivity(self, banks: List[str]) -> Dict[str, Any]:
+        """Weight and judgment sensitivity of the ranking and labels (see tools/sensitivity.py)."""
+        cache_key = "sensitivity:" + "|".join(banks)
+        if cache_key not in self.cache:
+            self.cache[cache_key] = run_sensitivity(self.evidence, banks, self.engine.cfg).to_dict()
+        return copy.deepcopy(self.cache[cache_key])
 
     # AI assistant (advisory only)
     def _run_assistant(

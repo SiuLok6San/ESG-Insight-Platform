@@ -209,6 +209,91 @@ def render_compare_charts(df: pd.DataFrame) -> None:
         st.altair_chart(pillars.properties(height=280), width="stretch")
 
 
+def render_robustness(report: Dict[str, Any], ranking: List[str]) -> None:
+    n = len(report["weight_results"])
+    st.markdown("### 🛡️ Robustness")
+    st.caption(
+        f"Weight sensitivity: each pillar weight moved by -10 to +10 percentage points in 5-point steps, then "
+        f"renormalised ({n} scenarios). Judgment sensitivity: every category moved one step up and down, one at "
+        "a time. Rankings use the one-decimal final score; a tie counts as a change."
+    )
+    for line in report["summary"]:
+        st.markdown(f"- {line}")
+
+    rows = [
+        {
+            "Bank": bank,
+            "Lowest": report["final_ranges"][bank][0],
+            "Highest": report["final_ranges"][bank][1],
+            "Default weights": report["base_finals"][bank],
+        }
+        for bank in ranking
+    ]
+    df = pd.DataFrame(rows)
+    lo = min(df["Lowest"].min(), 75.0) - 2
+    hi = max(df["Highest"].max(), 75.0) + 2
+    x_scale = alt.Scale(domain=[lo, hi])
+    tooltip = ["Bank", alt.Tooltip("Lowest:Q", format=".1f"), alt.Tooltip("Highest:Q", format=".1f"),
+               alt.Tooltip("Default weights:Q", format=".1f")]
+    y = alt.Y("Bank:N", sort=ranking, title=None)
+    span = alt.Chart(df).mark_rule(strokeWidth=6, strokeCap="round", color=FINAL_COLOR, opacity=0.35).encode(
+        y=y,
+        x=alt.X("Lowest:Q", scale=x_scale, title="Final ESG score", axis=alt.Axis(format=".0f", tickMinStep=1)),
+        x2="Highest:Q",
+        tooltip=tooltip,
+    )
+    point = alt.Chart(df).mark_point(filled=True, size=90, color=FINAL_COLOR, stroke="white", strokeWidth=2).encode(
+        y=y, x=alt.X("Default weights:Q", scale=x_scale), tooltip=tooltip
+    )
+    threshold = alt.Chart(pd.DataFrame({"x": [75]})).mark_rule(strokeDash=[4, 4], color="#8a8986").encode(x="x:Q")
+    st.markdown(f"**Final score range across {n} weight scenarios** (dot = default 35/30/35; dashed line = Meet threshold)")
+    st.altair_chart((span + point + threshold).properties(height=60 * len(ranking) + 40), width="stretch")
+    st.caption(
+        "Each bar spans a bank's lowest and highest final score over all weight scenarios. Bars can overlap even "
+        "when the ranking never changes, because within one scenario all banks move together."
+    )
+
+    moves = [m for m in report["moves"] if m["changes_ranking"] or m["changes_label"]]
+    with st.expander(f"Single judgment changes that change the ranking or a label ({len(moves)} of {len(report['moves'])})"):
+        if not moves:
+            st.write("None.")
+        else:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Bank": m["bank"],
+                            "Indicator": m["indicator"],
+                            "Change": f"{m['from_category']} → {m['to_category']}",
+                            "Final": f"{m['final_before']:.1f} → {m['final_after']:.1f}",
+                            "Changes ranking": "yes" if m["changes_ranking"] else "",
+                            "Changes label": f"{m['label_before']} → {m['label_after']}" if m["changes_label"] else "",
+                        }
+                        for m in moves
+                    ]
+                ),
+                hide_index=True,
+            )
+
+    with st.expander(f"All {n} weight scenarios"):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "w_E": r["weights"]["E"],
+                        "w_S": r["weights"]["S"],
+                        "w_G": r["weights"]["G"],
+                        **{bank: r["finals"][bank] for bank in ranking},
+                        "Ranking unchanged": r["ranking_unchanged"],
+                    }
+                    for r in report["weight_results"]
+                ]
+            ),
+            hide_index=True,
+            column_config={w: st.column_config.NumberColumn(format="%.3f") for w in ("w_E", "w_S", "w_G")},
+        )
+
+
 # MODE 1 - Compare banks
 if mode == "Compare banks":
     st.title("🏆 Dutch bank ESG benchmark")
@@ -249,6 +334,7 @@ if mode == "Compare banks":
         column_config={c: st.column_config.NumberColumn(format="%.1f") for c in ("E", "S", "G", "Weighted E/S/G", "Final")},
     )
     render_compare_charts(df)
+    render_robustness(server.sensitivity(comparison["ranking"]), comparison["ranking"])
 
     st.markdown("### 📡 Radar charts")
     cols = st.columns(len(comparison["ranking"]))
