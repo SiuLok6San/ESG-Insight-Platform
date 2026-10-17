@@ -60,9 +60,9 @@ class Server:
     def read_pdf(self, uploaded_file) -> str:
         """Extract text from an uploaded PDF (Streamlit file_uploader output)."""
         try:
-            from PyPDF2 import PdfReader
+            from pypdf import PdfReader
         except Exception as exc:  # pragma: no cover - optional dependency
-            print(f"[Server] PyPDF2 not available: {exc}")
+            print(f"[Server] pypdf not available: {exc}")
             return ""
 
         try:

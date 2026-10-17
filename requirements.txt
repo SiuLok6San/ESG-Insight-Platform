@@ -1,9 +1,11 @@
-streamlit>=1.36.0
-python-dotenv>=1.0.1
-requests>=2.31.0
-pandas>=2.2.2
-numpy>=2.0.0
-plotly>=5.22.0
-PyPDF2>=3.0.1
-tavily-python>=0.3.5
-pycryptodome>=3.20.0
+# Tested with Python 3.12 (numpy 2.5 requires Python >= 3.12).
+streamlit==1.66.0
+python-dotenv==1.2.4
+requests==2.34.2
+pandas==3.0.6
+numpy==2.5.4
+matplotlib==3.11.2
+feedparser==6.0.14
+pypdf==6.21.1
+cryptography==50.0.2  # needed by pypdf to open AES-encrypted bank reports
+yfinance==1.7.0

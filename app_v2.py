@@ -38,9 +38,9 @@ def extract_pdf_text(uploaded_file) -> str:
     if not uploaded_file:
         return ""
     try:
-        from PyPDF2 import PdfReader
+        from pypdf import PdfReader
     except Exception:
-        st.error("❌ PyPDF2 not installed. Please run: `pip install PyPDF2`")
+        st.error("❌ pypdf not installed. Please run: `pip install pypdf`")
         return ""
 
     try:

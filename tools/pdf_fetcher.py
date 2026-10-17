@@ -8,9 +8,9 @@ from io import BytesIO
 import requests
 
 try:
-    import PyPDF2
+    from pypdf import PdfReader
 except ImportError:
-    PyPDF2 = None
+    PdfReader = None
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +103,8 @@ BANK_START_URLS: Dict[str, str] = {
 
 def _download_pdf_text(url: str, timeout: int = 25) -> str:
 
-    if PyPDF2 is None:
-        logger.warning("[PDFFetcher] PyPDF2 not installed; cannot parse PDF.")
+    if PdfReader is None:
+        logger.warning("[PDFFetcher] pypdf not installed; cannot parse PDF.")
         return ""
 
     try:
@@ -115,7 +115,7 @@ def _download_pdf_text(url: str, timeout: int = 25) -> str:
         return ""
 
     try:
-        reader = PyPDF2.PdfReader(BytesIO(resp.content))
+        reader = PdfReader(BytesIO(resp.content))
         texts: List[str] = []
         for page in reader.pages:
             texts.append(page.extract_text() or "")
