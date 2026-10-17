@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, TypeVar
@@ -12,13 +13,16 @@ from agents.news_agent import NewsSummariser
 from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, load_evidence
 from tools.free_news import FreeNewsClient
 from tools.local_llm import LocalLLM
-from tools.pdf_fetcher import fetch_official_pdf
+from tools.pdf_fetcher import fetch_cited_pages
 from tools.pdf_summarizer import PDFSummarizer
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
 from tools.sensitivity import run_sensitivity
 from tools.yahoo_client import YahooFinanceClient
 
 T = TypeVar("T")
+
+# Analyses are cached per (bank, question, uploaded PDF); keep only the most recent ones.
+MAX_CACHE_ENTRIES = 64
 
 
 class Server:
@@ -53,6 +57,7 @@ class Server:
         self.engine = ScoreEngine(engine_config)
         self.fetch_external = fetch_external
         self.llm = LocalLLM()
+        self.llm_mode = use_llm
         self.use_llm = False if use_llm is False else self.llm.is_available()
 
         self.yahoo = YahooFinanceClient()
@@ -61,9 +66,15 @@ class Server:
         self.news_agent = NewsSummariser(self.llm)
         self.esg_agent = ESGAgent(self.llm)
         self.writer = FinalWriterAgent(self.llm)
-        self.cache: Dict[str, Dict[str, Any]] = {}
+        self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
 
     # Public API
+    def refresh_llm_status(self) -> bool:
+        """Re-check whether the LLM is reachable (unless it was switched off), e.g. after Ollama starts."""
+        if self.llm_mode is not False:
+            self.use_llm = self.llm.is_available()
+        return self.use_llm
+
     def banks(self) -> List[str]:
         return self.evidence.banks()
 
@@ -82,6 +93,8 @@ class Server:
                     "source_document": row.source_document,
                     "page": row.page,
                     "page_url": row.page_url,
+                    "page_label": row.page_label,
+                    "page_link": row.markdown_link(),
                     "status": row.status,
                     "notes": row.notes,
                 }
@@ -105,8 +118,9 @@ class Server:
     ) -> Dict[str, Any]:
         """Full analysis for one bank: scores, optional context, optional AI assistant."""
         cache_key = f"{bank}:{self._hash(question)}:{self._hash(pdf_text)}"
-        if cache_key in self.cache:
-            return copy.deepcopy(self.cache[cache_key])
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
 
         scored = self.score_bank(bank)
 
@@ -131,7 +145,7 @@ class Server:
             "yahoo": {"ok": bool(yahoo_snapshot), "snapshot": yahoo_snapshot},
             "pdf_filename": pdf_filename,
         }
-        self.cache[cache_key] = copy.deepcopy(result)
+        self._cache_put(cache_key, result)
         return result
 
     def compare_banks(self, banks: List[str]) -> Dict[str, Any]:
@@ -166,9 +180,11 @@ class Server:
     def sensitivity(self, banks: List[str]) -> Dict[str, Any]:
         """Weight and judgment sensitivity of the ranking and labels (see tools/sensitivity.py)."""
         cache_key = "sensitivity:" + "|".join(banks)
-        if cache_key not in self.cache:
-            self.cache[cache_key] = run_sensitivity(self.evidence, banks, self.engine.cfg).to_dict()
-        return copy.deepcopy(self.cache[cache_key])
+        cached = self._cache_get(cache_key)
+        if cached is None:
+            cached = run_sensitivity(self.evidence, banks, self.engine.cfg).to_dict()
+            self._cache_put(cache_key, cached)
+        return cached
 
     # AI assistant (advisory only)
     def _run_assistant(
@@ -193,7 +209,8 @@ class Server:
         try:
             if news_items:
                 out["news_summary"] = self.news_agent.summarise(bank, news_items)
-            report_text = pdf_text or fetch_official_pdf(self.evidence, bank)
+            # An uploaded PDF is summarised as is; otherwise only the pages the evidence cites.
+            report_text = pdf_text or fetch_cited_pages(self.evidence, bank)
             if report_text:
                 out["pdf_summary"] = self.pdf_summarizer.summarize(report_text, bank=bank, year=REPORTING_YEAR)
 
@@ -226,6 +243,18 @@ class Server:
         return out
 
     # Helpers
+    def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
+        if key not in self.cache:
+            return None
+        self.cache.move_to_end(key)
+        return copy.deepcopy(self.cache[key])
+
+    def _cache_put(self, key: str, value: Dict[str, Any]) -> None:
+        self.cache[key] = copy.deepcopy(value)
+        self.cache.move_to_end(key)
+        while len(self.cache) > MAX_CACHE_ENTRIES:
+            self.cache.popitem(last=False)
+
     @staticmethod
     def _hash(text: Optional[str]) -> str:
         text = (text or "").strip()

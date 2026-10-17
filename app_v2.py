@@ -8,7 +8,7 @@ import streamlit as st
 from server import Server
 from tools.evidence import REPORTING_YEAR
 from tools.radar_chart import create_esg_radar_chart
-from tools.score_engine import CONTROVERSY_DEDUCTION, PILLAR_NAMES
+from tools.score_engine import PILLAR_NAMES
 
 st.set_page_config(page_title="Dutch Bank ESG Benchmark", page_icon="📊", layout="wide")
 
@@ -23,6 +23,7 @@ def get_server() -> Server:
 
 
 server = get_server()
+server.refresh_llm_status()
 BANKS = server.banks()
 
 st.sidebar.title("⚙️ Configuration")
@@ -94,7 +95,7 @@ def render_breakdown(result: Dict[str, Any]) -> None:
         ]
         for item in (i for i in breakdown if i["pillar"] == pillar):
             category = "⚠️ not disclosed" if item["not_disclosed"] else f"`{item['category']}`"
-            source = f"[p. {item['page']}]({item['page_url']})" if item["page"] else "-"
+            source = item["page_link"]
             if item["status"] != "confirmed":
                 source += " (draft)"
             evidence = item["evidence_summary"].replace("|", "/")
@@ -104,10 +105,9 @@ def render_breakdown(result: Dict[str, Any]) -> None:
         st.markdown("\n".join(lines))
 
     c = result["controversy_evidence"]
-    st.markdown(
-        f"**Controversy - {c['category']} (−{CONTROVERSY_DEDUCTION.get(c['category'], 5):g} points)**: "
-        f"{c['evidence_summary']} [{c['source_document']}, p. {c['page']}]({c['page_url']})"
-    )
+    deduction = result["scores"]["controversy_deduction"]
+    detail = c["evidence_summary"] or c["notes"]
+    st.markdown(f"**Controversy - {c['category']} (−{deduction:g} points)**: {detail} ({c['source_link']})")
     if result["draft_indicators"]:
         st.warning(f"Unreviewed (draft) evidence rows: {', '.join(result['draft_indicators'])}")
     if any(item["not_disclosed"] for item in result["breakdown"]):

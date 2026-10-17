@@ -64,3 +64,20 @@ def test_esg_agent_returns_only_valid_suggestions():
 def test_json_extraction(raw, expected):
     _, parsed = ESGAgent._split_analysis_and_json(raw)
     assert parsed == expected
+
+
+def test_failed_availability_probe_is_rechecked(monkeypatch, tmp_path):
+    import requests as req
+    from tools import local_llm
+
+    clock = [100.0]
+    monkeypatch.setattr(local_llm.time, "monotonic", lambda: clock[0])
+    llm = LocalLLM(LocalLLMConfig(enabled=True, cache_dir=tmp_path))
+    with mock.patch("tools.local_llm.requests.get", side_effect=req.ConnectionError("refused")):
+        assert llm.is_available() is False
+    up = mock.Mock(status_code=200)
+    with mock.patch("tools.local_llm.requests.get", return_value=up) as get:
+        assert llm.is_available() is False  # within the recheck interval: no new probe
+        get.assert_not_called()
+        clock[0] += local_llm.RECHECK_AFTER_S
+        assert llm.is_available() is True  # Ollama started later is picked up

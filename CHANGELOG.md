@@ -31,10 +31,19 @@ Replaced placeholder fallback scoring with evidence-based scoring; removed the s
 - **Report links fixed.** The old links for ING returned HTTP 403, and every ABN AMRO link pointed to the subsidiary ABN AMRO Clearing Bank, not the group. Reports now come from the URLs cited in the evidence table.
 - **Dead code removed:** `NLUAgent`, the Playwright scraper, and unsourced bank figures that were passed to the LLM as facts.
 
+### Robustness fixes from the final review
+- **Stricter evidence validator.** It rejects page 0, and reports a malformed CSV row as a validation error instead of crashing.
+- **Consistent "not disclosed" citations.** A `not_disclosed` row reads "not disclosed" in the UI and report instead of producing an empty link or "p. None".
+- **News feeds can't hang the app.** Each Google News query has a 10-second timeout, and the queries run in parallel.
+- **Bounded cache.** The server cache is capped at 64 entries.
+- **LLM status rechecked.** Starting Ollama after the app is picked up without a restart.
+- **AI summary reads the cited pages.** It summarises the pages the evidence cites instead of the first ~24k characters of the report.
+- **No more bad cached reports.** A non-PDF download (e.g. an HTML block page) is no longer cached as the report.
+
 ### Documentation and tests
 - **README rewritten.** It was previously duplicated as `README.md` / `readme.md`, which collide on case-insensitive file systems.
 - **Pinned README numbers.** It now includes context, results from an actual run, methodology, screenshots and limitations; the results are pinned by `tests/test_published_results.py`.
-- **`pytest` suite added:** 58 tests covering the scoring engine, evidence validation, determinism, sensitivity analysis, the LLM client and an end-to-end smoke test of the backend and both Streamlit pages.
+- **`pytest` suite added:** 71 tests covering the scoring engine, evidence validation, determinism, sensitivity analysis, the LLM client, the network clients (mocked) and an end-to-end smoke test of the backend and both Streamlit pages.
 
 ## November 2025: original course version
 

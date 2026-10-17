@@ -21,6 +21,8 @@ import requests
 from dotenv import load_dotenv
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "llm"
+# A failed availability probe is retried after this many seconds.
+RECHECK_AFTER_S = 30.0
 
 
 def _env_int(name: str, default: int) -> int:
@@ -54,18 +56,24 @@ class LocalLLM:
         load_dotenv()
         self.config = config or LocalLLMConfig()
         self._available: Optional[bool] = None
+        self._checked_at = 0.0
 
     def is_available(self) -> bool:
-        """True if the LLM is enabled and the Ollama server answers (checked once)."""
-        if self._available is None:
-            if not self.config.enabled:
+        """True if the LLM is enabled and the Ollama server answers.
+
+        A positive result is kept; a negative one is re-checked after
+        ``RECHECK_AFTER_S`` seconds, so starting Ollama later is picked up.
+        """
+        if not self.config.enabled:
+            return False
+        now = time.monotonic()
+        if self._available is None or (not self._available and now - self._checked_at >= RECHECK_AFTER_S):
+            try:
+                resp = requests.get(f"{self.config.base_url}/api/tags", timeout=2)
+                self._available = resp.status_code == 200
+            except requests.RequestException:
                 self._available = False
-            else:
-                try:
-                    resp = requests.get(f"{self.config.base_url}/api/tags", timeout=2)
-                    self._available = resp.status_code == 200
-                except requests.RequestException:
-                    self._available = False
+            self._checked_at = now
         return self._available
 
     def ask(self, prompt: str) -> str:

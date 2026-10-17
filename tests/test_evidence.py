@@ -4,7 +4,7 @@ from collections import Counter
 import pytest
 
 from tests.helpers import BANKS
-from tools.evidence import COLUMNS, EVIDENCE_PATH, EvidenceError, load_evidence
+from tools.evidence import COLUMNS, EVIDENCE_PATH, EvidenceError, EvidenceRow, load_evidence
 from tools.score_engine import ALL_KEYS, NOT_DISCLOSED, allowed_categories
 
 
@@ -106,3 +106,35 @@ def test_not_disclosed_row_needs_notes_but_no_page(tmp_path):
     write_csv(tmp_path / "e.csv", rows)
     table = load_evidence(tmp_path / "e.csv")
     assert table.for_bank(rows[0]["bank"])[rows[0]["indicator"]].page is None
+
+
+@pytest.mark.parametrize("page", ["0", "-3", "12a", ""])
+def test_page_must_be_a_positive_integer(tmp_path, page):
+    rows, _ = read_raw_rows()
+    rows[0] = {**rows[0], "page": page}
+    write_csv(tmp_path / "e.csv", rows)
+    with pytest.raises(EvidenceError, match="page must be a positive integer"):
+        load_evidence(tmp_path / "e.csv")
+
+
+@pytest.mark.parametrize("tail", ["ING Group,climate_plan\n", "ING Group,climate_plan,sbt_aligned,s,d,1,https://x,confirmed,n,EXTRA\n"])
+def test_malformed_row_is_reported_not_crashing(tmp_path, tail):
+    rows, _ = read_raw_rows()
+    path = tmp_path / "e.csv"
+    write_csv(path, rows[1:])  # drop the real ING climate_plan row
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(tail)
+    with pytest.raises(EvidenceError) as err:
+        load_evidence(path)
+    assert f"line {len(rows) + 1}: expected {len(COLUMNS)} columns" in err.value.problems
+
+
+def test_citation_helpers(evidence):
+    row = evidence.for_bank("ING Group")["climate_plan"]
+    assert row.page_label == "p. 111"
+    assert row.markdown_link() == f"[p. 111]({row.url}#page=111)"
+    assert row.markdown_link(with_document=True) == f"[ING Group Annual Report 2025, p. 111]({row.url}#page=111)"
+
+    hidden = EvidenceRow(**{**row.__dict__, "category": NOT_DISCLOSED, "page": None, "url": "", "source_document": ""})
+    assert (hidden.page_url, hidden.page_label, hidden.markdown_link(True)) == ("", "not disclosed", "not disclosed")
+    assert "None" not in str(hidden.to_dict()["source_link"])

@@ -38,7 +38,7 @@ class FinalWriterAgent:
         tables = []
         for pillar, name in PILLAR_NAMES.items():
             rows = [
-                f"| {item['label']} | {item['category']} | {item['score']} | {item['evidence_summary']} (p. {item['page']}) |"
+                f"| {item['label']} | {item['category']} | {item['score']} | {item['evidence_summary']} ({item['page_label']}) |"
                 for item in breakdown
                 if item["pillar"] == pillar
             ]

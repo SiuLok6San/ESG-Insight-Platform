@@ -7,7 +7,8 @@ from typing import Any, List, Optional
 class PDFSummarizer:
     llm: Any
     max_chars_per_chunk: int = 8000
-    max_chunks: int = 3
+    # Enough for the ~15 cited pages of one report; longer uploads are truncated.
+    max_chunks: int = 16
 
     def _split_into_chunks(self, text: str) -> List[str]:
         text = text.replace("\r", "\n")

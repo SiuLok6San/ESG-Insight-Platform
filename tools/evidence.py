@@ -53,14 +53,31 @@ class EvidenceRow:
 
     @property
     def page_url(self) -> str:
-        """Link that opens the source PDF at the cited page."""
-        if not self.url:
+        """Link that opens the source PDF at the cited page ("" if nothing is cited)."""
+        if not self.url or not self.page:
             return ""
-        return f"{self.url}#page={self.page}" if self.page else self.url
+        return f"{self.url}#page={self.page}"
+
+    @property
+    def page_label(self) -> str:
+        """Plain-text citation such as "p. 111", or "not disclosed"."""
+        return f"p. {self.page}" if self.page_url else "not disclosed"
+
+    def markdown_link(self, with_document: bool = False) -> str:
+        """Markdown link to the cited page, or "not disclosed" when there is no citation."""
+        if not self.page_url:
+            return "not disclosed"
+        text = f"{self.source_document}, {self.page_label}" if with_document else self.page_label
+        return f"[{text}]({self.page_url})"
 
     def to_dict(self) -> Dict[str, object]:
         data = asdict(self)
-        data["page_url"] = self.page_url
+        data.update(
+            page_url=self.page_url,
+            page_label=self.page_label,
+            page_link=self.markdown_link(),
+            source_link=self.markdown_link(with_document=True),
+        )
         return data
 
 
@@ -84,9 +101,10 @@ class EvidenceTable:
         return {key: row.category for key, row in self.for_bank(bank).items()}
 
 
-def _parse_page(raw: str) -> Optional[int]:
+def _parse_page(raw: Optional[str]) -> Optional[int]:
+    """A positive integer page number, or ``None``."""
     raw = (raw or "").strip()
-    return int(raw) if raw.isdigit() else None
+    return int(raw) if raw.isdigit() and int(raw) > 0 else None
 
 
 def validate_rows(raw_rows: List[Dict[str, str]], fieldnames: List[str]) -> List[str]:
@@ -99,6 +117,10 @@ def validate_rows(raw_rows: List[Dict[str, str]], fieldnames: List[str]) -> List
     seen: Dict[tuple, int] = {}
     banks: List[str] = []
     for line_no, r in enumerate(raw_rows, start=2):
+        # csv.DictReader stores surplus fields under None and fills missing ones with None.
+        if None in r or any(r.get(c) is None for c in COLUMNS):
+            problems.append(f"line {line_no}: expected {len(COLUMNS)} columns")
+            continue
         where = f"line {line_no} ({r['bank']} / {r['indicator']})"
         if r["bank"] not in banks:
             banks.append(r["bank"])

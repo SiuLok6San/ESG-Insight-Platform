@@ -72,7 +72,7 @@ Events already scored as `fined` under AML maturity or customer protection are n
 
 A tie between banks counts as a ranking change.
 
-**7. Optional AI assistant.** If a local LLM is running, it summarises the report and news, suggests categories and drafts a narrative.
+**7. Optional AI assistant.** If a local LLM is running, it summarises the cited report pages and the news, suggests categories and drafts a narrative.
 - It never changes a score: its suggestions are shown next to the evidence as "AI suggestion, not used in score".
 - Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 
@@ -118,7 +118,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example).
 
-To run the tests (58 tests, no LLM or network needed):
+To run the tests (71 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -139,7 +139,7 @@ pytest
   - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
 - **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
 - **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
-- **AI assistant.** The optional assistant summarises only the first part of a long report and is not used for scoring.
+- **AI assistant.** The optional assistant was tested with a stub, not against a running model, and is not used for scoring.
 - **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
 
 ## Project structure

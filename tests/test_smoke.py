@@ -54,3 +54,21 @@ def test_streamlit_single_bank_page_renders():
     assert at.selectbox[0].value == BANKS[0]
     text = "\n".join(m.value for m in at.markdown)
     assert "Climate transition plan" in text and "#page=" in text
+
+
+def test_server_cache_is_bounded(offline_server, monkeypatch):
+    import server as server_module
+
+    monkeypatch.setattr(server_module, "MAX_CACHE_ENTRIES", 3)
+    for i in range(5):
+        offline_server.analyze_bank("ING Group", question=f"question {i}")
+    assert len(offline_server.cache) == 3
+    assert offline_server.analyze_bank("ING Group", question="question 4")["ok"]
+
+
+def test_streamlit_shows_engine_deduction():
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.sidebar.radio[0].set_value("Single bank").run()
+    text = "\n".join(m.value for m in at.markdown)
+    assert "**Controversy - moderate (−2 points)**" in text
+    assert "p. None" not in text
