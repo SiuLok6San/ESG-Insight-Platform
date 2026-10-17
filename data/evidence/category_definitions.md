@@ -14,6 +14,9 @@ applied to every bank. Rows are proposed as `draft` and only become
 - **Enforcement window:** fines, settlements and remediation are considered
   if they occurred in FY2023–FY2025. Older events are mentioned in `notes`
   but do not set the category on their own.
+- **Events after the reporting year** (e.g. a fine imposed in 2026) are
+  recorded in `notes` but do not change the category, so every bank is
+  assessed on the same reporting year (decided 2026-10-17).
 - **Two-tier boards:** Dutch banks have a Supervisory Board (non-executive)
   and an Executive/Management Board. Board independence is measured on the
   Supervisory Board.
