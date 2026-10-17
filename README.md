@@ -1,141 +1,179 @@
-# 🇳🇱 Dutch Bank ESG Intelligence System
+# Dutch Bank ESG Benchmark
 
-An AI-assisted（Local LLM） ESG (Environmental, Social, Governance) analytics and benchmarking system
-for major Dutch banks, including **ING Group**, **ABN AMRO**, and **Rabobank**.
+An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
-This project is designed as an **institution-style ESG intelligence prototype**.
-It integrates public data sources, official bank disclosures, deterministic scoring logic,
-and optional local LLM reasoning to generate **explainable and reproducible ESG assessments**.
+## Context
 
-A core design goal is **robustness**: the system continues to function even when
-local LLM inference or external data sources are unavailable.
+- **Course project:** Columbia University industry-sponsored course project with Accenture, September–November 2025. Team project.
+- **My role:** `[TO BE FILLED BY ME]`
+- **Revision (October 2026):** the scoring was rebuilt to be fully evidence-based. The original version fell back to randomly chosen rubric categories when the local LLM was unavailable and showed a simulated confidence band. Both are gone; see the [CHANGELOG](CHANGELOG.md).
 
----
+## Results
 
-## ✨ What This System Does
+Scores from the evidence table (FY2025 annual reports), default weights 35% E / 30% S / 35% G:
 
-- Performs ESG analysis for a **single bank** or **multiple banks (comparison)**
-- Extracts ESG signals from:
-  - Official annual / sustainability PDF reports
-  - Yahoo Finance business profiles
-  - Google News RSS (ESG-related headlines)
-- Converts qualitative ESG evidence into **0–100 numeric scores**
-- Generates:
-  - ESG pillar scores (E / S / G)
-  - Detailed rubric sub-scores
-  - A final ESG score and compliance label
-  - Radar charts and comparison tables
-  - A structured ESG intelligence report
+| Rank | Bank | E | S | G | Weighted E/S/G | Controversy | **Final** | Compliance label |
+|---|---|---|---|---|---|---|---|---|
+| 1 | ING Group | 84.3 | 70.0 | 75.0 | 76.7 | moderate (−2) | **74.7** | Almost Meet |
+| 2 | Rabobank | 82.3 | 70.0 | 70.0 | 74.3 | moderate (−2) | **72.3** | Almost Meet |
+| 3 | ABN AMRO | 79.3 | 71.3 | 70.0 | 73.6 | severe (−5) | **68.6** | Almost Meet |
 
----
+![Radar charts of the E, S and G pillar scores](docs/screenshots/radar.png)
 
-## 🚀 Key Features
+**Robustness**
 
-### Dual Analysis Modes
+- **The ranking is robust.** It is unchanged in 121 of 121 weight scenarios, in which each pillar weight moves by up to ±10 percentage points. Of 63 single one-step changes to a category judgment, only one changes the ranking: ING Group's controversy moving from `moderate` to `severe`.
+- **The compliance label is not robust.** ING Group (74.7) is 0.3 points below the 75-point "Meet" threshold. Its label changes in 47 of 121 weight scenarios and with any of 7 single one-step upgrades.
 
-**Single Bank Analysis**
-- Optional PDF upload (annual / sustainability reports)
-- ESG reasoning assisted by a local LLM (if available)
-- Outputs ESG scores, confidence bands, radar charts, and a detailed report
+**Why the ranking holds:**
+- ING Group scores at least as high as Rabobank on every pillar.
+- Rabobank's lead over ABN AMRO comes from a higher Environmental score and a smaller controversy deduction.
 
-**Bank Comparison Mode**
-- Fast comparison across multiple banks
-- Uses deterministic rubric scoring and public signals
-- Produces ranked ESG tables and comparison charts
+## Methodology
 
----
+The model scores five auditable dimensions: three pillars (**Environmental**, **Social**, **Governance**), a **controversy** adjustment, and a **compliance** label.
 
-### Hybrid ESG Scoring Engine (v3.0)
+**1. Evidence table.** [`data/evidence/esg_evidence.csv`](data/evidence/esg_evidence.csv) holds one row per bank × indicator (3 × 15 = 45 rows). Each row has:
+- a category;
+- a short evidence summary;
+- the source document, page number and URL;
+- a review status.
 
-- Accepts either qualitative ESG categories or direct numeric ESG scores
-- Converts signals into strict **0–100 E / S / G scores**
-- Weighted aggregation:
-  - Environmental (35%)
-  - Social (30%)
-  - Governance (35%)
-- Fully deterministic, explainable, and reproducible
+All rows were proposed as drafts and confirmed by review. The rule for assigning each category is written down in [`category_definitions.md`](data/evidence/category_definitions.md).
 
----
+**2. Sources.** One document per bank: its FY2025 annual report, which contains the CSRD sustainability statement (prepared under ESRS, with limited assurance from the external auditor).
+- [ING Group Annual Report 2025](https://ing.com/binaries/content/assets/documents/annual-reports/2025-ing-groep-nv-annual-report.pdf)
+- [ABN AMRO Bank Annual Report 2025](https://downloads.ctfassets.net/1u811bvgvthc/688tP3vcLbHAgEsUavbdMR/22bd74bf45996df3f6e76b0893ecc950/ABN_AMRO_Bank_-_Annual_Report_2025.pdf)
+- [Rabobank Annual Report 2025](https://media.rabobank.com/m/5fdc5677200a9d1f/original/Annual-Report-2025.pdf)
 
-### Robust Fallback Design
+**3. Rubric.** 14 indicators, each mapped from a category to a fixed 0–100 score in [`tools/score_engine.py`](tools/score_engine.py):
 
-- If the local LLM is unavailable, the system automatically switches to deterministic scoring
-- If external data is missing, analysis degrades gracefully without breaking the UI
-- Safe for live demos, academic presentations, and offline environments
+| Pillar (weight) | Indicators (weight within pillar) |
+|---|---|
+| Environmental (35%) | Climate transition plan (20%), emissions disclosure (20%), financed emissions (20%), EU Taxonomy alignment (15%), climate risk management (15%), fossil fuel policy (10%) |
+| Social (30%) | Diversity & inclusion, labour rights, customer protection, AML maturity (25% each) |
+| Governance (35%) | Board independence, ESG oversight, ESG-linked executive pay, CSRD transparency (25% each) |
 
----
+An indicator marked `not_disclosed` receives the lowest score and is flagged in the UI.
 
-## 🛠️ System Architecture
+**4. Controversy adjustment.** It deducts 0, 2 or 5 points for `none`, `moderate` or `severe`, based on each bank's legal-proceedings disclosures:
+- `moderate`: ESG-related litigation or remediation is ongoing.
+- `severe`: a new ESG-related fine, settlement or conviction in the reporting year.
+
+Events already scored as `fined` under AML maturity or customer protection are not counted again.
+
+**5. Final score and compliance label.**
+- **Formula:** final = 0.35 × E + 0.30 × S + 0.35 × G − controversy deduction, clamped to 0–100 and rounded to one decimal.
+- **Labels:** **Meet** (≥ 75), **Almost Meet** (≥ 50) or **Not Meet**, assigned from the rounded score.
+
+**6. Sensitivity analysis.** [`tools/sensitivity.py`](tools/sensitivity.py) runs two checks:
+- **Weights:** moves each pillar weight by −10/−5/0/+5/+10 percentage points and renormalises them (121 unique scenarios).
+- **Judgments:** moves every category judgment one step up and down, one at a time.
+
+A tie between banks counts as a ranking change.
+
+**7. Optional AI assistant.** If a local LLM is running, it summarises the report and news, suggests categories and drafts a narrative.
+- It never changes a score: its suggestions are shown next to the evidence as "AI suggestion, not used in score".
+- Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
+
+## Screenshots
+
+**Comparison:** scores, pillar charts and the Meet threshold.
+
+![Comparison page](docs/screenshots/compare_overview.png)
+
+**Single bank:** the calculation and the evidence behind every indicator, with links to the cited PDF page.
+
+![Evidence breakdown](docs/screenshots/evidence_breakdown.png)
+
+**Robustness panel**
+
+![Robustness panel](docs/screenshots/robustness.png)
+
+## How to run
+
+Requires Python 3.12. From the repository root:
+
+```bash
+python3.12 -m venv .venv
+```
+
+```bash
+source .venv/bin/activate
+```
+
+```bash
+pip install -r requirements.txt
+```
+
+```bash
+streamlit run app_v2.py
+```
+
+The app runs fully without an LLM. To enable the optional AI assistant, install [Ollama](https://ollama.com) and pull the model:
+
+```bash
+ollama pull llama3
+```
+
+LLM settings are optional; see [`.env.example`](.env.example).
+
+To run the tests (58 tests, no LLM or network needed):
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+```bash
+pytest
+```
+
+## Limitations
+
+- **One reporting year.** The evidence reflects FY2025 annual reports only.
+  - Events after the reporting year are noted in the evidence table but not scored. For example, DNB fined ABN AMRO in July 2026.
+  - Rabobank's financed emissions figures relate to its 2024 portfolio.
+- **Analyst judgment.**
+  - Categories are judgments against written definitions, not mechanical extractions.
+  - Some thresholds are conventions; for example, the EU does not define high or low Green Asset Ratio bands.
+  - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
+- **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
+- **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
+- **AI assistant.** The optional assistant summarises only the first part of a long report and is not used for scoring.
+- **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
+
+## Project structure
 
 ```text
-Streamlit UI (app_v2.py)
-        │
-        ▼
-Backend Orchestrator (server.py)
-        │
- ┌──────┴────────────────────┐
- ▼                           ▼
-LLM-Assisted Agents           Deterministic Tools
---------------------          -------------------
-- ESGAgent                   - ScoreEngine
-- NewsAgent                  - YahooFinanceClient
-- FinalWriterAgent           - Google News RSS
-- NLUAgent                   - Radar Chart Generator
-                              - PDF Fetcher & Summarizer
+├── app_v2.py                    # Streamlit UI
+├── server.py                    # Orchestrator: scores, optional context, optional AI assistant
+├── agents/
+│   ├── esg_agent.py             # LLM category suggestions (advisory only)
+│   ├── final_writer.py          # LLM narrative report (advisory only)
+│   └── news_agent.py            # LLM news summary (advisory only)
+├── tools/
+│   ├── score_engine.py          # Rubric, pillar scores, controversy, compliance label
+│   ├── evidence.py              # Loads and validates the evidence table
+│   ├── sensitivity.py           # Weight and judgment sensitivity analysis
+│   ├── local_llm.py             # Optional Ollama client (temperature 0, fixed seed, cache)
+│   ├── pdf_fetcher.py           # Downloads the cited annual report
+│   ├── pdf_summarizer.py        # LLM report summary (advisory only)
+│   ├── free_news.py             # Google News RSS (context only)
+│   ├── yahoo_client.py          # Yahoo Finance snapshot (context only)
+│   ├── dutch_banks.py           # Bank names and aliases
+│   └── radar_chart.py           # Radar chart
+├── data/evidence/
+│   ├── esg_evidence.csv         # 45 confirmed evidence rows
+│   └── category_definitions.md  # Rules for assigning each category
+├── tests/                       # pytest suite
+├── docs/
+│   ├── ESG_FIX_SPEC.md          # Revision specification
+│   └── screenshots/
+├── requirements.txt
+├── requirements-dev.txt
+└── CHANGELOG.md
+```
 
-Dutch_Bank_ESG/
-├── app_v2.py                 # Streamlit UI (main entry)
-├── server.py                 # Backend orchestrator
-├── requirements.txt          # Python dependencies
-├── .env                      # Optional environment config
-│
-├── agents/                   # LLM-assisted reasoning layer
-│   ├── esg_agent.py
-│   ├── news_agent.py
-│   ├── final_writer.py
-│   └── nlu_agent.py
-│
-└── tools/      
-    ├── score_engine.py
-    ├── radar_chart.py
-    ├── yahoo_client.py
-    ├── free_news.py
-    ├── pdf_fetcher.py
-    ├── pdf_summarizer.py
-    └── dutch_banks.py
+## License
 
-
-📦 Installation & Setup
-
-To run the system locally, ensure you have Python 3.9 or higher installed and that
-pip is available. Creating a virtual environment is recommended but not required.
-
-First, create and activate a virtual environment:
-
-python -m venv venv
-source venv/bin/activate        # macOS / Linux
-# or
-venv\Scripts\activate           # Windows
-
-pip install -r requirements.txt
-
-# Install all required Python packages:
-
-pip install -r requirements.txt
-
-This installs Streamlit (UI), PDF parsing libraries, data processing tools,
-news and finance clients, and visualization utilities.
-
-The system optionally supports local LLM inference via Ollama for deeper ESG
-reasoning and report generation. To enable this feature, install Ollama from
-https://ollama.com
- and run a local model, for example:
-
-ollama pull
- ollama run llama3
-
-If no local LLM is running, the system will automatically fall back to
-deterministic ESG scoring while keeping all charts and tables functional.
-
-Finally, start the Streamlit dashboard:
-streamlit run app_v2.py
+MIT, see [LICENSE](LICENSE).
