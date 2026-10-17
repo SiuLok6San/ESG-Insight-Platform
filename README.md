@@ -5,7 +5,11 @@ An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every
 ## Context
 
 - **Course project:** Columbia University industry-sponsored course project with Accenture, September–November 2025. Team project.
-- **My role:** `[TO BE FILLED BY ME]`
+- **My role:**
+  - Designed the ESG scoring framework: a 25-indicator rubric (14 of which are scored in this implementation) across environmental, social, and governance pillars, pillar weights (35/30/35), a controversy adjustment, and a compliance label
+  - Analyzed the banks' annual, sustainability, and CSRD reports and translated regulatory disclosures into rubric categories
+  - Built the interactive Streamlit dashboard (radar charts, peer comparison, score explanations) using AI coding tools
+  - Presented the framework and findings to Accenture stakeholders
 - **Revision (October 2026):** the scoring was rebuilt to be fully evidence-based. The original version fell back to randomly chosen rubric categories when the local LLM was unavailable and showed a simulated confidence band. Both are gone; see the [CHANGELOG](CHANGELOG.md).
 
 ## Results
