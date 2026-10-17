@@ -46,8 +46,6 @@ class FreeNewsClient:
     # Internal Helpers
     def _build_queries(self, bank: str) -> List[str]:
         """Build multi-keyword Google News search queries."""
-        base = [bank]
-
         esg_terms = [
             "ESG",
             "sustainability",

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +32,7 @@ class YahooFinanceClient:
 
         try:
             t = yf.Ticker(ticker)
-            info = t.info  # 网络请求
+            info = t.info  # network request
         except Exception as e:
             logger.warning(f"[YahooFinanceClient] Failed to fetch info for {ticker}: {e}")
             return f"Yahoo Finance snapshot unavailable for ticker {ticker}."
@@ -61,7 +60,7 @@ class YahooFinanceClient:
         if ticker:
             return self._snapshot_from_ticker(ticker)
 
-        # 没有 ticker（如 Rabobank）
+        # No listed ticker (e.g. Rabobank)
         return (
             f"No direct stock ticker mapping found for bank '{bank_norm}'. "
             "Bank may be privately held or not listed. "
