@@ -56,6 +56,23 @@ def render_score_cards(scores: Dict[str, Any]) -> None:
     st.markdown(f"**Compliance label:** {scores['label']}  ·  Meet ≥ 75, Almost Meet ≥ 50, otherwise Not Meet")
 
 
+def render_calculation(scores: Dict[str, Any]) -> None:
+    """Show how the final score follows from the pillar scores."""
+    cfg = server.engine.cfg
+    p = scores["pillars"]
+    st.markdown("**How the final score is calculated**")
+    st.markdown(
+        f"1. Weighted E/S/G: {cfg.w_E:.2f} × {p['E']:.1f} + {cfg.w_S:.2f} × {p['S']:.1f} + "
+        f"{cfg.w_G:.2f} × {p['G']:.1f} = **{scores['weighted']:.1f}**\n"
+        f"2. Controversy ({scores['controversy']}): −{scores['controversy_deduction']:.1f}\n"
+        f"3. Final score: **{scores['final']:.1f}** → label **{scores['label']}**"
+    )
+    st.caption(
+        "Pillar scores are weighted averages of the indicator scores below. Weighted and final scores are "
+        "computed from unrounded pillar scores and then rounded to one decimal."
+    )
+
+
 def render_radar(scores: Dict[str, Any], bank: str) -> None:
     p = scores["pillars"]
     fig = create_esg_radar_chart(p["E"], p["S"], p["G"], bank_name=bank)
@@ -358,6 +375,8 @@ else:
     c1, c2 = st.columns([1, 2])
     with c1:
         render_radar(scored["scores"], bank)
+    with c2:
+        render_calculation(scored["scores"])
     st.markdown("### 📑 Score breakdown")
     render_breakdown(scored)
 
