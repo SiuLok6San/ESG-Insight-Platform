@@ -17,6 +17,7 @@ from tools.pdf_fetcher import fetch_cited_pages
 from tools.pdf_summarizer import PDFSummarizer
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
 from tools.sensitivity import run_sensitivity
+from tools.ai_review import REVIEW_PATH, load_reviews, summarise
 from tools.yahoo_client import YahooFinanceClient
 
 T = TypeVar("T")
@@ -42,6 +43,7 @@ class Server:
         use_llm: Optional[bool] = None,
         fetch_external: bool = True,
         evidence_path: Path | str = EVIDENCE_PATH,
+        review_path: Path | str = REVIEW_PATH,
         engine_config: Optional[ScoreEngineConfig] = None,
     ) -> None:
         """
@@ -54,6 +56,8 @@ class Server:
             Fetch Yahoo Finance and Google News context (network access).
         """
         self.evidence = load_evidence(evidence_path)
+        # Offline AI evidence review (advisory only); empty if it has not been run.
+        self.reviews = load_reviews(review_path)
         self.engine = ScoreEngine(engine_config)
         self.fetch_external = fetch_external
         self.llm = LocalLLM()
@@ -97,6 +101,7 @@ class Server:
                     "page_link": row.markdown_link(),
                     "status": row.status,
                     "notes": row.notes,
+                    "ai_review": self.reviews.get((bank, ind.key)),
                 }
             )
 
@@ -105,7 +110,10 @@ class Server:
         return {
             "scores": scores,
             "breakdown": breakdown,
-            "controversy_evidence": rows[CONTROVERSY_KEY].to_dict(),
+            "controversy_evidence": {
+                **rows[CONTROVERSY_KEY].to_dict(),
+                "ai_review": self.reviews.get((bank, CONTROVERSY_KEY)),
+            },
             "draft_indicators": [key for key, row in rows.items() if row.status != "confirmed"],
         }
 
@@ -175,6 +183,17 @@ class Server:
             "per_bank_results": per_bank,
             "errors": errors,
             "comparison_summary": "\n".join(lines),
+        }
+
+    def ai_review_summary(self) -> Dict[str, Any]:
+        """Counts from the offline AI evidence review; ``rows`` is 0 if it has not been run."""
+        return {
+            **summarise(self.reviews),
+            "disagreements": [
+                dict(r)
+                for r in self.reviews.values()
+                if r["ai_verdict"] != "supports" or not r["category_agrees"] or not r["quote_verified"]
+            ],
         }
 
     def sensitivity(self, banks: List[str]) -> Dict[str, Any]:

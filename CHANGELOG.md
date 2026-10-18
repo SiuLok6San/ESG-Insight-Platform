@@ -4,6 +4,7 @@
 
 - **Continuous integration.** GitHub Actions runs the test suite on every push and pull request (Python 3.12, Linux); the README shows the status badge.
 - **Live demo** deployed on Streamlit Community Cloud and linked from the README.
+- **AI evidence review.** An offline LLM check of every evidence row against its cited page, with verbatim-quote verification. Results are shown in the app as "not used in score". It uses an OpenAI-compatible client for Gemini, Groq or Ollama, and adds tests plus a guard that fails if an API key is ever committed.
 
 ## October 2026: evidence-based revision
 

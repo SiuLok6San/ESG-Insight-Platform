@@ -11,7 +11,7 @@ import hashlib
 import logging
 from io import BytesIO
 from pathlib import Path
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 import requests
 
@@ -59,21 +59,33 @@ def _download(url: str, timeout: int = 60) -> Optional[bytes]:
     return resp.content
 
 
+def download_report(url: str) -> Optional[bytes]:
+    """The PDF at ``url`` (from the on-disk cache when available), or ``None``."""
+    return _download(url)
+
+
+def extract_pages(data: bytes, pages: Sequence[int]) -> Dict[int, str]:
+    """Text of each requested 1-based page; pages outside the PDF are skipped."""
+    if PdfReader is None:
+        logger.warning("[PDFFetcher] pypdf not installed; cannot parse PDF.")
+        return {}
+    try:
+        reader = PdfReader(BytesIO(data))
+        return {n: reader.pages[n - 1].extract_text() or "" for n in pages if 0 < n <= len(reader.pages)}
+    except Exception as exc:
+        logger.warning("[PDFFetcher] Failed to parse PDF: %s", exc)
+        return {}
+
+
 def pdf_bytes_to_text(data: bytes, pages: Optional[Sequence[int]] = None) -> str:
     """Text of the PDF, or only of ``pages`` (1-based, each prefixed with its page number)."""
+    if pages is not None:
+        return "\n\n".join(f"--- page {n} ---\n{text}" for n, text in extract_pages(data, pages).items())
     if PdfReader is None:
         logger.warning("[PDFFetcher] pypdf not installed; cannot parse PDF.")
         return ""
     try:
-        reader = PdfReader(BytesIO(data))
-        if pages is None:
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        parts = [
-            f"--- page {n} ---\n{reader.pages[n - 1].extract_text() or ''}"
-            for n in pages
-            if 0 < n <= len(reader.pages)
-        ]
-        return "\n\n".join(parts)
+        return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
     except Exception as exc:
         logger.warning("[PDFFetcher] Failed to parse PDF: %s", exc)
         return ""

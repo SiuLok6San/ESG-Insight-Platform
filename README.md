@@ -87,6 +87,12 @@ A tie between banks counts as a ranking change.
 - It never changes a score: its suggestions are shown next to the evidence as "AI suggestion, not used in score".
 - Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 
+**8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
+- For each row, an LLM reads only the cited PDF page and answers three things: does the page support the evidence summary; which category it would assign from the written definitions; which passage backs its answer.
+- The passage must be quoted verbatim, and the code checks that it really appears on the page, so an invented quote is flagged rather than trusted.
+- Results are saved in `data/evidence/ai_review.csv` and shown in the app as "AI check, not used in score". Disagreements are prompts to re-check a row; they never change a category.
+- The client in [`tools/llm_provider.py`](tools/llm_provider.py) works with any OpenAI-compatible API (Gemini by default; Groq or a local Ollama by configuration).
+
 ## Screenshots
 
 **Comparison:** scores, pillar charts and the Meet threshold.
@@ -129,7 +135,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example).
 
-To run the tests (71 tests, no LLM or network needed):
+To run the tests (89 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -137,6 +143,12 @@ pip install -r requirements-dev.txt
 
 ```bash
 pytest
+```
+
+To re-run the AI evidence review, put a Gemini API key in `.env` as `GEMINI_API_KEY` (see [`.env.example`](.env.example)). Then:
+
+```bash
+python -m scripts.review_evidence
 ```
 
 ## Limitations
@@ -166,6 +178,8 @@ pytest
 │   ├── score_engine.py          # Rubric, pillar scores, controversy, compliance label
 │   ├── evidence.py              # Loads and validates the evidence table
 │   ├── sensitivity.py           # Weight and judgment sensitivity analysis
+│   ├── ai_review.py             # AI evidence review: prompts, quote check, results file
+│   ├── llm_provider.py          # OpenAI-compatible client (Gemini, Groq, Ollama)
 │   ├── local_llm.py             # Optional Ollama client (temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
 │   ├── pdf_summarizer.py        # LLM report summary (advisory only)
@@ -176,6 +190,8 @@ pytest
 ├── data/evidence/
 │   ├── esg_evidence.csv         # 45 confirmed evidence rows
 │   └── category_definitions.md  # Rules for assigning each category
+├── scripts/
+│   └── review_evidence.py       # Offline AI evidence review
 ├── tests/                       # pytest suite
 ├── docs/
 │   ├── ESG_FIX_SPEC.md          # Revision specification

@@ -81,17 +81,37 @@ def render_radar(scores: Dict[str, Any], bank: str) -> None:
     plt.close(fig)
 
 
+AI_VERDICT_LABELS = {
+    "supports": "✓ supports",
+    "partially_supports": "◐ partly supports",
+    "does_not_support": "✗ does not support",
+}
+
+
+def ai_check_text(review: Any) -> str:
+    """Short table cell for the offline AI evidence review (not used in score)."""
+    if not review:
+        return "-"
+    text = AI_VERDICT_LABELS.get(review["ai_verdict"], "? invalid answer")
+    if not review["category_agrees"] and review["ai_suggested_category"]:
+        text += f" · suggests `{review['ai_suggested_category']}`"
+    if not review["quote_verified"]:
+        text += " · quote not found"
+    return text
+
+
 def render_breakdown(result: Dict[str, Any]) -> None:
     """Indicator -> category -> evidence -> source page, per pillar."""
     breakdown: List[Dict[str, Any]] = result["breakdown"]
     documents = sorted({item["source_document"] for item in breakdown if item["source_document"]})
     st.caption(f"Source: {', '.join(documents)}. Page links open the PDF at the cited page.")
+    has_review = any(item["ai_review"] for item in breakdown)
     for pillar, name in PILLAR_NAMES.items():
         lines = [
             f"**{name} - {result['scores']['pillars'][pillar]:.1f}**",
             "",
-            "| Indicator | Category | Score | Weight | Evidence | Source |",
-            "|---|---|---|---|---|---|",
+            "| Indicator | Category | Score | Weight | Evidence | Source |" + (" AI check* |" if has_review else ""),
+            "|---|---|---|---|---|---|" + ("---|" if has_review else ""),
         ]
         for item in (i for i in breakdown if i["pillar"] == pillar):
             category = "⚠️ not disclosed" if item["not_disclosed"] else f"`{item['category']}`"
@@ -99,15 +119,32 @@ def render_breakdown(result: Dict[str, Any]) -> None:
             if item["status"] != "confirmed":
                 source += " (draft)"
             evidence = item["evidence_summary"].replace("|", "/")
-            lines.append(
-                f"| {item['label']} | {category} | {item['score']} | {item['weight']:.0%} | {evidence} | {source} |"
-            )
+            row = f"| {item['label']} | {category} | {item['score']} | {item['weight']:.0%} | {evidence} | {source} |"
+            if has_review:
+                row += f" {ai_check_text(item['ai_review'])} |"
+            lines.append(row)
         st.markdown("\n".join(lines))
+    if has_review:
+        st.caption(
+            "*AI check: an independent LLM read only the cited page and judged whether it supports the evidence "
+            "summary. Not used in score. Details below."
+        )
 
     c = result["controversy_evidence"]
     deduction = result["scores"]["controversy_deduction"]
     detail = c["evidence_summary"] or c["notes"]
     st.markdown(f"**Controversy - {c['category']} (−{deduction:g} points)**: {detail} ({c['source_link']})")
+    if has_review:
+        st.caption(f"AI check (not used in score): {ai_check_text(c['ai_review'])}")
+        with st.expander("AI review details: quotes and explanations (not used in score)"):
+            for item in breakdown + [{"label": "Controversy", "ai_review": c["ai_review"]}]:
+                review = item["ai_review"]
+                if review:
+                    found = "found on the page" if review["quote_verified"] else "NOT found on the page"
+                    st.markdown(
+                        f"- **{item['label']}** ({ai_check_text(review)}): {review['explanation']}  \n"
+                        f"  Quote ({found}): \"{review['quote']}\""
+                    )
     if result["draft_indicators"]:
         st.warning(f"Unreviewed (draft) evidence rows: {', '.join(result['draft_indicators'])}")
     if any(item["not_disclosed"] for item in result["breakdown"]):
@@ -312,6 +349,44 @@ def render_robustness(report: Dict[str, Any], ranking: List[str]) -> None:
         )
 
 
+def render_ai_review_summary(summary: Dict[str, Any]) -> None:
+    st.markdown("### 🔎 AI evidence review (not used in score)")
+    if not summary["rows"]:
+        st.caption("The offline AI evidence review has not been run yet.")
+        return
+    n = summary["rows"]
+    v = summary["verdicts"]
+    st.markdown(
+        f"An independent LLM ({', '.join(summary['models'])}, run on {', '.join(summary['reviewed_on'])}) read each "
+        f"cited page and checked the evidence row against it:\n"
+        f"- **Supports the evidence summary:** {v['supports']} of {n} rows; partly: {v['partially_supports']}; "
+        f"does not support: {v['does_not_support']}\n"
+        f"- **Same category as the analyst:** {summary['category_agrees']} of {n}\n"
+        f"- **Quote found verbatim on the cited page:** {summary['quote_verified']} of {n}"
+    )
+    if summary["disagreements"]:
+        with st.expander(f"Rows to re-check ({len(summary['disagreements'])})"):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Bank": r["bank"],
+                            "Indicator": r["indicator"],
+                            "Evidence category": r["evidence_category"],
+                            "AI check": ai_check_text(r),
+                            "AI explanation": r["explanation"],
+                        }
+                        for r in summary["disagreements"]
+                    ]
+                ),
+                hide_index=True,
+            )
+    st.caption(
+        "The review only sees the single cited page, so 'partly' can be expected where the analyst's notes cite "
+        "further pages. Disagreements are prompts to re-check the evidence; they never change a category."
+    )
+
+
 # MODE 1 - Compare banks
 if mode == "Compare banks":
     st.title("🏆 Dutch bank ESG benchmark")
@@ -353,6 +428,7 @@ if mode == "Compare banks":
     )
     render_compare_charts(df)
     render_robustness(server.sensitivity(comparison["ranking"]), comparison["ranking"])
+    render_ai_review_summary(server.ai_review_summary())
 
     st.markdown("### 📡 Radar charts")
     cols = st.columns(len(comparison["ranking"]))
