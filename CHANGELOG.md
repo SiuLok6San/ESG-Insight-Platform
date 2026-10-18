@@ -4,6 +4,8 @@
 
 - **Continuous integration.** GitHub Actions runs the test suite on every push and pull request (Python 3.12, Linux); the README shows the status badge.
 - **Live demo** deployed on Streamlit Community Cloud and linked from the README.
+- **AI assistant online.** On the Single bank page, users can ask a question about a bank. The answer comes from Ollama Cloud (`gemma4:31b`) or a local Ollama server, based on the reviewed evidence and recent news, with page citations. The categories the AI suggests are scored with the same engine and shown as an "AI estimate", separate from the official score, which never changes. The online demo allows 5 questions per visit.
+- **Redeploy fix.** The app now reloads its backend modules when their files change, fixing an error on the live demo after an update.
 - **AI evidence review.** An offline LLM check of every evidence row against its cited page, with verbatim-quote verification. Results are shown in the app as "not used in score". It uses an OpenAI-compatible client (Ollama Cloud by default; Gemini, Groq or local Ollama by configuration), and adds tests plus a guard that fails if an API key is ever committed. First run (Ollama Cloud, gemma4:31b): 32 of 45 rows fully supported, 13 partly, 0 not supported; same category in 39 of 45; 42 of 45 quotes verified.
 
 ## October 2026: evidence-based revision

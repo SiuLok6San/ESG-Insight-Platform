@@ -1,9 +1,10 @@
 """Minimal client for OpenAI-compatible chat APIs (Ollama Cloud, Gemini, Groq, local Ollama).
 
-Used by the offline AI evidence review (``scripts/review_evidence.py``).
-Requests use temperature 0 and ask for a JSON object; every response is
-cached on disk under a hash of the full request, so a re-run reproduces the
-same output without calling the API again. The API key is read from an
+Used by the offline AI evidence review (``scripts/review_evidence.py``, via
+``chat_json``) and the AI assistant (``tools/local_llm.py``, via ``chat_text``).
+Requests use temperature 0; every response is cached on disk under a hash of
+the full request, so a re-run reproduces the same output without calling the
+API again. The API key is read from an
 environment variable (normally set in ``.env``) and is never logged.
 """
 
@@ -62,10 +63,13 @@ class OpenAICompatibleClient:
         timeout: int = 120,
         max_retries: int = 5,
         min_interval_s: float = 4.5,
+        base_url: Optional[str] = None,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"Unknown provider {provider!r}; choose from {sorted(PROVIDERS)}")
         self.config = PROVIDERS[provider]
+        if base_url:
+            self.config = ProviderConfig(self.config.name, base_url.rstrip("/") + "/", self.config.model, self.config.api_key_env)
         self.model = model or self.config.model
         if not self.model:
             raise ValueError(f"Provider {provider!r} needs an explicit model name")
@@ -93,13 +97,46 @@ class OpenAICompatibleClient:
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
-        cache_key = hashlib.sha256(
-            json.dumps({"base_url": self.config.base_url, **payload}, sort_keys=True).encode()
-        ).hexdigest()
+        cache_key = self._cache_key(payload)
         cached = self._read_cache(cache_key)
         if cached is not None:
             return cached
+        content = self._post(payload)
+        try:
+            parsed = json.loads(_strip_code_fence(content))
+        except ValueError as exc:
+            raise ProviderError(f"Unexpected response from {self.config.name}: {exc}") from exc
+        if not isinstance(parsed, dict):
+            raise ProviderError(f"{self.config.name} returned JSON that is not an object")
+        self._write_cache(cache_key, parsed)
+        return parsed
 
+    def chat_text(self, user: str, system: Optional[str] = None, max_tokens: int = 1024) -> str:
+        """Send one chat request and return the reply text."""
+        messages = ([{"role": "system", "content": system}] if system else []) + [{"role": "user", "content": user}]
+        payload: Dict[str, object] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+        }
+        if self.config.name.startswith("ollama"):
+            payload["seed"] = 42  # Ollama documents seed support for reproducible sampling
+        cache_key = self._cache_key(payload)
+        cached = self._read_cache(cache_key)
+        if cached is not None:
+            return str(cached["text"])
+        text = self._post(payload).strip()
+        if not text:
+            raise ProviderError(f"{self.config.name} returned an empty reply")
+        self._write_cache(cache_key, {"text": text})
+        return text
+
+    def _cache_key(self, payload: Dict[str, object]) -> str:
+        return hashlib.sha256(json.dumps({"base_url": self.config.base_url, **payload}, sort_keys=True).encode()).hexdigest()
+
+    def _post(self, payload: Dict[str, object]) -> str:
+        """POST to chat/completions with retries; return the message content."""
         headers = {"Content-Type": "application/json"}
         key = self._api_key()
         if key:
@@ -128,14 +165,9 @@ class OpenAICompatibleClient:
                 # The body explains bad requests; it never contains the key.
                 raise ProviderError(f"HTTP {resp.status_code} from {self.config.name}: {resp.text[:300]}")
             try:
-                content = resp.json()["choices"][0]["message"]["content"]
-                parsed = json.loads(_strip_code_fence(content))
+                return resp.json()["choices"][0]["message"]["content"] or ""
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProviderError(f"Unexpected response from {self.config.name}: {exc}") from exc
-            if not isinstance(parsed, dict):
-                raise ProviderError(f"{self.config.name} returned JSON that is not an object")
-            self._write_cache(cache_key, parsed)
-            return parsed
         raise ProviderError(f"{self.config.name} failed after {self.max_retries} attempts ({last_error})")
 
     def _read_cache(self, key: str) -> Optional[Dict[str, object]]:

@@ -4,7 +4,7 @@
 
 An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
-**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). The optional AI assistant is off online. If the app has been idle, it may take about 30 seconds to wake up.
+**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). On the Single bank page you can ask the AI assistant a question about a bank (5 questions per visit). If the app has been idle, it may take about 30 seconds to wake up.
 
 ## Context
 
@@ -92,8 +92,9 @@ Events already scored as `fined` under AML maturity or customer protection are n
 
 A tie between banks counts as a ranking change.
 
-**7. Optional AI assistant.** If a local LLM is running, it summarises the cited report pages and the news, suggests categories and drafts a narrative.
-- It never changes a score: its suggestions are shown next to the evidence as "AI suggestion, not used in score".
+**7. Optional AI assistant.** On the Single bank page, a user can ask a question about a bank. An LLM (Ollama Cloud `gemma4:31b` online, or a local Ollama server) answers from the reviewed evidence table, recent news and market data, and an optional uploaded PDF, citing report pages. It also suggests categories for the indicators.
+- It never changes the official score. The categories it suggests are scored with the same engine and shown separately as "AI estimate (not official)", with a list of the indicators where it disagrees with the evidence. Indicators it does not classify keep the evidence category.
+- The online demo allows 5 questions per visit, to stay within the free API quota.
 - Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 
 **8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
@@ -136,15 +137,15 @@ pip install -r requirements.txt
 streamlit run app_v2.py
 ```
 
-The app runs fully without an LLM. To enable the optional AI assistant, install [Ollama](https://ollama.com) and pull the model:
+The app runs fully without an LLM. To enable the optional AI assistant, either put an Ollama Cloud API key in `.env` as `OLLAMA_API_KEY` (create one at [ollama.com/settings/keys](https://ollama.com/settings/keys)), or install [Ollama](https://ollama.com) and pull a local model:
 
 ```bash
 ollama pull llama3
 ```
 
-LLM settings are optional; see [`.env.example`](.env.example).
+LLM settings are optional; see [`.env.example`](.env.example). On Streamlit Community Cloud, add `OLLAMA_API_KEY` under the app's **Settings → Secrets** instead of a `.env` file.
 
-To run the tests (91 tests, no LLM or network needed):
+To run the tests (93 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -171,7 +172,7 @@ python -m scripts.review_evidence
   - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
 - **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
 - **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
-- **AI assistant.** The optional assistant was tested with a stub, not against a running model, and is not used for scoring.
+- **AI assistant.** Its answers and AI estimate come from a language model and can be wrong. They may also draw on news that is not part of the reviewed evidence. They are advisory and never used for scoring.
 - **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
 
 ## Project structure
@@ -189,7 +190,7 @@ python -m scripts.review_evidence
 │   ├── sensitivity.py           # Weight and judgment sensitivity analysis
 │   ├── ai_review.py             # AI evidence review: prompts, quote check, results file
 │   ├── llm_provider.py          # OpenAI-compatible client (Ollama Cloud, Gemini, Groq, local Ollama)
-│   ├── local_llm.py             # Optional Ollama client (temperature 0, fixed seed, cache)
+│   ├── local_llm.py             # AI assistant client (Ollama Cloud or local Ollama; temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
 │   ├── pdf_summarizer.py        # LLM report summary (advisory only)
 │   ├── free_news.py             # Google News RSS (context only)

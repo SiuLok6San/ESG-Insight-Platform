@@ -1,16 +1,23 @@
-"""Optional local LLM client (Ollama).
+"""LLM client for the optional AI assistant.
 
-The LLM is advisory only: it summarises documents and suggests rubric
-categories, but it never changes a score. Calls are made reproducible by
-using temperature 0 and a fixed seed, and every response is cached on disk
-under a hash of the full request, so the same input always returns the same
-output.
+The assistant is advisory only: it answers questions, suggests rubric
+categories and drafts a narrative, but it never changes the official score.
+
+The model is reached through the OpenAI-compatible client in
+``tools/llm_provider.py``:
+
+- ``LLM_PROVIDER=auto`` (default) uses Ollama Cloud when ``OLLAMA_API_KEY``
+  is set, otherwise a local Ollama server;
+- ``LLM_PROVIDER`` can also name a provider explicitly (e.g. ``ollama``,
+  ``ollama-cloud``, ``gemini``).
+
+Calls use temperature 0 (and a fixed seed where supported), and every reply
+is cached on disk under a hash of the full request, so the same input always
+returns the same output.
 """
 
 from __future__ import annotations
 
-import hashlib
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -20,8 +27,10 @@ from typing import Optional
 import requests
 from dotenv import load_dotenv
 
+from tools.llm_provider import PROVIDERS, OpenAICompatibleClient, ProviderError
+
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "llm"
-# A failed availability probe is retried after this many seconds.
+# A failed local availability probe is retried after this many seconds.
 RECHECK_AFTER_S = 30.0
 
 
@@ -37,18 +46,19 @@ def _env_bool(name: str, default: bool) -> bool:
 class LocalLLMConfig:
     # Defaults are read when the config is created (after load_dotenv), not at import time.
     enabled: bool = field(default_factory=lambda: _env_bool("LLM_ENABLED", True))
-    model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "llama3"))
-    base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", "http://localhost:11434"))
-    temperature: float = 0.0
-    seed: int = 42
+    provider: str = field(default_factory=lambda: os.getenv("LLM_PROVIDER", "auto").strip() or "auto")
+    # Model for a local Ollama server and for Ollama Cloud (empty = the provider's default).
+    local_model: str = field(default_factory=lambda: os.getenv("LLM_MODEL", "llama3"))
+    cloud_model: str = field(default_factory=lambda: os.getenv("OLLAMA_CLOUD_MODEL", "").strip())
+    local_base_url: str = field(default_factory=lambda: os.getenv("LLM_BASE_URL", "http://localhost:11434"))
     timeout: int = field(default_factory=lambda: _env_int("LLM_TIMEOUT", 120))
-    num_predict: int = field(default_factory=lambda: _env_int("LLM_NUM_PREDICT", 1024))
+    max_tokens: int = field(default_factory=lambda: _env_int("LLM_NUM_PREDICT", 1024))
     max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
     cache_dir: Optional[Path] = CACHE_DIR
 
 
 class LLMUnavailable(RuntimeError):
-    """Raised when the local LLM is disabled or cannot be reached."""
+    """Raised when the LLM is disabled, unreachable or misconfigured."""
 
 
 class LocalLLM:
@@ -58,76 +68,62 @@ class LocalLLM:
         self._available: Optional[bool] = None
         self._checked_at = 0.0
 
-    def is_available(self) -> bool:
-        """True if the LLM is enabled and the Ollama server answers.
+    @property
+    def provider(self) -> str:
+        if self.config.provider != "auto":
+            return self.config.provider
+        return "ollama-cloud" if os.getenv("OLLAMA_API_KEY", "").strip() else "ollama"
 
-        A positive result is kept; a negative one is re-checked after
+    @property
+    def model(self) -> str:
+        if self.provider == "ollama":
+            return self.config.local_model
+        if self.provider == "ollama-cloud" and self.config.cloud_model:
+            return self.config.cloud_model
+        return PROVIDERS[self.provider].model or ""
+
+    def describe(self) -> str:
+        return f"{self.provider}/{self.model}"
+
+    def is_available(self) -> bool:
+        """True if the LLM is enabled and usable.
+
+        Hosted providers count as available when their API key is set. A local
+        Ollama server is probed; a failed probe is re-checked after
         ``RECHECK_AFTER_S`` seconds, so starting Ollama later is picked up.
         """
-        if not self.config.enabled:
+        if not self.config.enabled or self.provider not in PROVIDERS:
             return False
+        key_env = PROVIDERS[self.provider].api_key_env
+        if key_env:
+            return bool(os.getenv(key_env, "").strip())
         now = time.monotonic()
         if self._available is None or (not self._available and now - self._checked_at >= RECHECK_AFTER_S):
             try:
-                resp = requests.get(f"{self.config.base_url}/api/tags", timeout=2)
+                resp = requests.get(f"{self.config.local_base_url}/api/tags", timeout=2)
                 self._available = resp.status_code == 200
             except requests.RequestException:
                 self._available = False
             self._checked_at = now
         return self._available
 
+    def _client(self) -> OpenAICompatibleClient:
+        base_url = self.config.local_base_url + "/v1/" if self.provider == "ollama" else None
+        return OpenAICompatibleClient(
+            self.provider,
+            model=self.model,
+            cache_dir=self.config.cache_dir,
+            timeout=self.config.timeout,
+            max_retries=self.config.max_retries,
+            min_interval_s=0,
+            base_url=base_url,
+        )
+
     def ask(self, prompt: str) -> str:
-        """Return the model's response to ``prompt`` (from cache when possible)."""
-        payload = {
-            "model": self.config.model,
-            "prompt": prompt,
-            "stream": False,
-            "options": {
-                "temperature": self.config.temperature,
-                "seed": self.config.seed,
-                "num_predict": self.config.num_predict,
-            },
-        }
-        key = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-
-        cached = self._read_cache(key)
-        if cached is not None:
-            return cached
+        """Return the model's reply to ``prompt`` (from cache when possible)."""
         if not self.is_available():
-            raise LLMUnavailable(
-                f"Local LLM '{self.config.model}' is disabled or not reachable at {self.config.base_url}"
-            )
-
-        last_err: Optional[Exception] = None
-        for attempt in range(1, self.config.max_retries + 1):
-            try:
-                resp = requests.post(
-                    f"{self.config.base_url}/api/generate",
-                    json=payload,
-                    timeout=(10, self.config.timeout),
-                )
-                resp.raise_for_status()
-                text = (resp.json().get("response") or "").strip()
-                if not text:
-                    raise RuntimeError("empty response")
-                self._write_cache(key, payload, text)
-                return text
-            except Exception as exc:
-                last_err = exc
-                time.sleep(0.4 * attempt)
-        raise LLMUnavailable(f"Local LLM call failed after {self.config.max_retries} attempts: {last_err}")
-
-    def _read_cache(self, key: str) -> Optional[str]:
-        if self.config.cache_dir is None:
-            return None
-        path = self.config.cache_dir / f"{key}.json"
-        if not path.exists():
-            return None
-        return json.loads(path.read_text(encoding="utf-8"))["response"]
-
-    def _write_cache(self, key: str, payload: dict, text: str) -> None:
-        if self.config.cache_dir is None:
-            return
-        self.config.cache_dir.mkdir(parents=True, exist_ok=True)
-        record = {"model": payload["model"], "options": payload["options"], "response": text}
-        (self.config.cache_dir / f"{key}.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+            raise LLMUnavailable(f"LLM {self.describe()} is disabled or not reachable")
+        try:
+            return self._client().chat_text(prompt, max_tokens=self.config.max_tokens)
+        except (ProviderError, ValueError) as exc:
+            raise LLMUnavailable(str(exc)) from exc

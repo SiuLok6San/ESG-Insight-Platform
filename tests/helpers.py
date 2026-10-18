@@ -50,6 +50,8 @@ class StubLLM:
     def ask(self, prompt: str) -> str:
         self.calls += 1
         if "single JSON object" in prompt:
+            self.last_prompt = prompt
+        if "single JSON object" in prompt:
             return (
                 "Narrative analysis.\n"
                 '{"climate_plan": "weak", "fossil_policy": "exit", '

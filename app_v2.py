@@ -1,5 +1,7 @@
-import importlib
+import hashlib
+import os
 import sys
+from pathlib import Path
 from typing import Any, Dict, List
 
 import altair as alt
@@ -7,10 +9,56 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from server import Server, code_fingerprint
-from tools.evidence import REPORTING_YEAR
-from tools.radar_chart import create_esg_radar_chart
-from tools.score_engine import PILLAR_NAMES
+ROOT = Path(__file__).resolve().parent
+BACKEND_PACKAGES = ("server", "tools", "agents")
+
+
+def backend_fingerprint() -> str:
+    """Hash of the backend code and data files."""
+    paths = (
+        [ROOT / "server.py"]
+        + sorted((ROOT / "tools").glob("*.py"))
+        + sorted((ROOT / "agents").glob("*.py"))
+        + sorted((ROOT / "data" / "evidence").glob("*"))
+    )
+    digest = hashlib.sha256()
+    for path in paths:
+        if path.is_file():
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+def drop_stale_backend(fingerprint: str) -> None:
+    """Forget backend modules that were imported from older files.
+
+    After a redeploy, Streamlit re-runs this script with the new code, but
+    modules imported earlier (server, tools.*, agents.*) stay in memory. The
+    ``server`` module is tagged with the fingerprint of the files it was
+    imported from; if the files have changed since, all backend modules are
+    dropped so the imports below load the new versions together.
+    """
+    server_module = sys.modules.get("server")
+    if server_module is None:
+        return
+    tag = getattr(server_module, "_backend_fingerprint", None)
+    # Modules from the release before this check carry LOADED_FINGERPRINT instead of a tag: treat them as stale.
+    if tag is None and not hasattr(server_module, "LOADED_FINGERPRINT"):
+        server_module._backend_fingerprint = fingerprint  # imported from the current files
+    elif tag != fingerprint:
+        for module_name in [m for m in list(sys.modules) if m.split(".")[0] in BACKEND_PACKAGES]:
+            del sys.modules[module_name]
+
+
+BACKEND_FINGERPRINT = backend_fingerprint()
+drop_stale_backend(BACKEND_FINGERPRINT)
+
+from server import Server  # noqa: E402  (imported after the stale-module check)
+from tools.evidence import REPORTING_YEAR  # noqa: E402
+from tools.radar_chart import create_esg_radar_chart  # noqa: E402
+from tools.score_engine import PILLAR_NAMES  # noqa: E402
+
+sys.modules["server"]._backend_fingerprint = BACKEND_FINGERPRINT
 
 st.set_page_config(page_title="Dutch Bank ESG Benchmark", page_icon="📊", layout="wide")
 
@@ -19,30 +67,26 @@ PILLAR_COLORS = {"E": "#2a78d6", "S": "#eb6834", "G": "#1baf7a"}
 FINAL_COLOR = "#2a78d6"
 
 
-def backend_module(fingerprint: str):
-    """The ``server`` module matching the files on disk.
-
-    After a redeploy, Streamlit re-runs this page with the new code, but the
-    backend modules imported earlier (server, tools.*, agents.*) can still be
-    the old versions. If the files changed since they were imported, drop
-    those modules and import them again, so new page code never meets an old
-    Server class.
-    """
-    module = sys.modules.get("server")
-    if module is None or getattr(module, "LOADED_FINGERPRINT", None) != fingerprint:
-        for name in [m for m in list(sys.modules) if m == "server" or m.split(".")[0] in ("tools", "agents")]:
-            del sys.modules[name]
-        module = importlib.import_module("server")
-    return module
-
-
 @st.cache_resource(max_entries=1)
 def get_server(fingerprint: str) -> Server:
-    # Keyed on the code and data fingerprint: any change builds a fresh Server from fresh modules.
-    return backend_module(fingerprint).Server()
+    # Keyed on the backend fingerprint: changed code or data builds a fresh Server.
+    return Server()
 
 
-server = get_server(code_fingerprint())
+def load_secrets_into_env() -> None:
+    """Expose LLM settings stored as Streamlit secrets (e.g. on Streamlit Cloud) as environment variables."""
+    try:
+        secrets = {k: st.secrets[k] for k in st.secrets}
+    except Exception:  # no secrets file: nothing to load
+        return
+    for name in ("OLLAMA_API_KEY", "LLM_PROVIDER", "OLLAMA_CLOUD_MODEL", "AI_QUESTIONS_PER_SESSION"):
+        value = secrets.get(name)
+        if value and not os.environ.get(name):
+            os.environ[name] = str(value)
+
+
+load_secrets_into_env()
+server = get_server(BACKEND_FINGERPRINT)
 server.refresh_llm_status()
 BANKS = server.banks()
 
@@ -57,7 +101,11 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown(
     "**AI assistant:** "
-    + ("available. Advisory only; it never changes a score." if server.use_llm else "off (no local LLM reachable). Scores are unaffected.")
+    + (
+        f"available ({server.llm.describe()}). Advisory only; it never changes the official score."
+        if server.use_llm
+        else "off (no LLM configured). Scores are unaffected."
+    )
 )
 
 
@@ -175,39 +223,74 @@ def render_breakdown(result: Dict[str, Any]) -> None:
                 st.markdown(f"- **{item['label']}**: {item['notes']}")
 
 
-def render_assistant(assistant: Dict[str, Any]) -> None:
-    st.markdown("### 🤖 AI assistant (advisory only)")
+def render_assistant(assistant: Dict[str, Any], official: Dict[str, Any]) -> None:
     if not assistant.get("enabled"):
         st.info(
-            "The AI assistant is off because no local LLM (Ollama) is reachable from this app. It is optional "
-            "and never changes the scores. To try it, run the app on your own computer with Ollama installed "
-            "and `ollama pull llama3`."
+            "The AI assistant is off because no LLM is configured for this app. It is optional and never "
+            "changes the scores. To try it on your own computer, set OLLAMA_API_KEY in .env (Ollama Cloud) "
+            "or run a local Ollama server."
         )
         return
     if assistant.get("error"):
         st.warning(f"The AI assistant stopped early: {assistant['error']}")
 
-    if assistant.get("suggestions"):
-        st.markdown("**AI suggestion, not used in score**")
-        df = pd.DataFrame(
-            [
-                {
-                    "Indicator": s["label"],
-                    "Evidence category (used)": s["evidence_category"],
-                    "AI suggestion (not used)": s["ai_suggestion"] or "-",
-                    "Agrees": "✓" if s["agrees"] else "",
-                }
-                for s in assistant["suggestions"]
-            ]
+    if assistant.get("analysis_text"):
+        st.markdown(f"**AI answer** ({assistant.get('model', 'LLM')}, not used in score)")
+        st.markdown(assistant["analysis_text"])
+
+    estimate = assistant.get("ai_estimate")
+    if estimate:
+        st.markdown("**AI estimate vs official score**")
+        ai = estimate["scores"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Official score (evidence)", f"{official['final']:.1f}", help=official["label"])
+        c2.metric(
+            "AI estimate (not official)",
+            f"{ai['final']:.1f}",
+            delta=f"{ai['final'] - official['final']:+.1f}",
+            delta_color="off",
         )
-        st.dataframe(df, hide_index=True)
-        if assistant.get("rejected"):
-            st.caption(f"AI values outside the rubric were ignored: {assistant['rejected']}")
+        c3.metric("AI estimate label", ai["label"])
+        if estimate["changed"]:
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {"Indicator": c["label"], "Evidence category (official)": c["evidence_category"], "AI category": c["ai_category"]}
+                        for c in estimate["changed"]
+                    ]
+                ),
+                hide_index=True,
+            )
+        else:
+            st.caption("The AI chose the same category as the evidence for every indicator it classified.")
+        if estimate["kept_from_evidence"]:
+            st.caption(
+                f"{len(estimate['kept_from_evidence'])} indicator(s) the AI did not classify keep the evidence category "
+                "in the estimate. The estimate uses the same scoring engine as the official score."
+            )
+
+    if assistant.get("suggestions"):
+        with st.expander("All AI category suggestions (not used in score)"):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Indicator": s["label"],
+                            "Evidence category (used)": s["evidence_category"],
+                            "AI suggestion (not used)": s["ai_suggestion"] or "-",
+                            "Agrees": "✓" if s["agrees"] else "",
+                        }
+                        for s in assistant["suggestions"]
+                    ]
+                ),
+                hide_index=True,
+            )
+            if assistant.get("rejected"):
+                st.caption(f"AI values outside the rubric were ignored: {assistant['rejected']}")
 
     for title, key in (
         ("AI narrative report", "report"),
-        ("AI analysis", "analysis_text"),
-        ("AI summary of the annual report", "pdf_summary"),
+        ("AI summary of the uploaded PDF", "pdf_summary"),
         ("AI summary of ESG news", "news_summary"),
     ):
         if assistant.get(key):
@@ -478,28 +561,42 @@ else:
     render_breakdown(scored)
 
     st.markdown("---")
-    st.markdown("### Optional: news context and AI assistant")
-    st.caption("Fetches news and market data and, if a local LLM is running, AI suggestions. Scores above do not change.")
-    question = ""
-    uploaded_pdf = None
-    if server.use_llm:
-        question = st.text_area("Focus question for the AI assistant (optional)", height=100)
-        uploaded_pdf = st.file_uploader("Extra PDF for the AI assistant (optional)", type=["pdf"])
+    st.markdown("### 🤖 Ask the AI assistant")
+    if not server.use_llm:
+        render_assistant({"enabled": False}, scored["scores"])
+    else:
+        limit = int(os.getenv("AI_QUESTIONS_PER_SESSION", "5"))
+        used = st.session_state.get("ai_questions_used", 0)
+        st.caption(
+            f"Model: {server.llm.describe()}. The AI answers from the reviewed evidence above (plus recent news), "
+            "suggests rubric categories, and shows the score those categories would give. It never changes the "
+            f"official score. Questions left in this session: {max(limit - used, 0)} of {limit}."
+        )
+        question = st.text_area(
+            "Your question",
+            placeholder=f"e.g. How credible is {bank}'s climate transition plan, and what would change its score?",
+            height=100,
+            key=f"question_{bank}",
+        )
+        uploaded_pdf = st.file_uploader("Extra PDF for the AI (optional)", type=["pdf"], key=f"pdf_{bank}")
+        if used >= limit:
+            st.info(f"This demo allows {limit} AI questions per visit, to stay within the free API quota.")
+        if st.button("Ask", type="primary", disabled=used >= limit):
+            pdf_text = ""
+            if uploaded_pdf is not None:
+                from tools.pdf_fetcher import pdf_bytes_to_text
 
-    if st.button("Load context", type="primary"):
-        pdf_text = ""
-        if uploaded_pdf is not None:
-            from tools.pdf_fetcher import pdf_bytes_to_text
-
-            pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
-        with st.spinner("Fetching news and running the AI assistant..."):
-            result = server.analyze_bank(
-                bank=bank,
-                question=question or None,
-                pdf_text=pdf_text or None,
-                pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
-            )
-        render_context(result)
-        render_assistant(result["assistant"])
-    elif not server.use_llm:
-        render_assistant({"enabled": False})
+                pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
+            with st.spinner("Asking the AI (usually 10-40 seconds)..."):
+                st.session_state[f"ai_result_{bank}"] = server.analyze_bank(
+                    bank=bank,
+                    question=question or None,
+                    pdf_text=pdf_text or None,
+                    pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
+                )
+            st.session_state["ai_questions_used"] = used + 1
+            st.rerun()  # redraw so the "questions left" caption shows the new count
+        result = st.session_state.get(f"ai_result_{bank}")
+        if result:
+            render_assistant(result["assistant"], scored["scores"])
+            render_context(result)

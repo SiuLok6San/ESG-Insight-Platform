@@ -108,7 +108,10 @@ Pick exactly ONE value from the allowed options for each key, or
 
 Output requirements
 -------------------
-1. First, write a short narrative analysis (max ~300 words) in plain English.
+1. First, answer the user's question directly in plain English (max ~250
+   words), based on the evidence above. Cite page numbers (e.g. "p. 111").
+   If there is no specific question, give a short assessment of the bank's
+   ESG profile. Say so when the evidence does not cover something.
 2. Then, on a NEW LINE, output a single JSON object ONLY (no backticks, no
    commentary) with exactly these keys and string values:
 

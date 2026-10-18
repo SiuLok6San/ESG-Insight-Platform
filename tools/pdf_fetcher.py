@@ -1,8 +1,9 @@
-"""Download a bank's official annual report and extract the cited pages.
+"""Download a bank's official annual report and extract pages from it.
 
-The report URL and page numbers come from the evidence table, so the
-optional LLM summary reads exactly the pages that the scores cite. Downloads
-are cached on disk under ``.cache/reports`` so each report is fetched once.
+The report URL and the cited page numbers come from the evidence table; the
+offline AI evidence review reads exactly the pages that the scores cite.
+Downloads are cached on disk under ``.cache/reports`` so each report is
+fetched once.
 """
 
 from __future__ import annotations
@@ -89,12 +90,3 @@ def pdf_bytes_to_text(data: bytes, pages: Optional[Sequence[int]] = None) -> str
     except Exception as exc:
         logger.warning("[PDFFetcher] Failed to parse PDF: %s", exc)
         return ""
-
-
-def fetch_cited_pages(evidence: EvidenceTable, bank: str) -> str:
-    """Text of the pages cited for ``bank``, or an empty string if unavailable."""
-    url = official_report_url(evidence, bank)
-    if not url:
-        return ""
-    data = _download(url)
-    return pdf_bytes_to_text(data, cited_pages(evidence, bank)) if data else ""

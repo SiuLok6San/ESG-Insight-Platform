@@ -68,12 +68,14 @@ def test_only_cited_pages_are_extracted(tmp_path, cache_dir):
     table = table.__class__(table.rows)
 
     with mock.patch("tools.pdf_fetcher.requests.get", return_value=FakeResponse((tmp_path / "r.pdf").read_bytes())):
-        text = pdf_fetcher.fetch_cited_pages(table, "Bank")
+        data = pdf_fetcher.download_report("https://example.com/report.pdf")
 
-    assert pdf_fetcher.cited_pages(table, "Bank") == [2, 4]
-    assert "Content of page 2" in text and "Content of page 4" in text
-    assert "Content of page 1" not in text and "Content of page 3" not in text
-    assert text.startswith("--- page 2 ---")
+    pages = pdf_fetcher.cited_pages(table, "Bank")
+    texts = pdf_fetcher.extract_pages(data, pages)
+    assert pages == [2, 4] and set(texts) == {2, 4}
+    assert "Content of page 2" in texts[2] and "Content of page 4" in texts[4]
+    joined = pdf_fetcher.pdf_bytes_to_text(data, pages)
+    assert joined.startswith("--- page 2 ---") and "Content of page 1" not in joined
 
 
 def test_non_pdf_response_is_not_cached(cache_dir):

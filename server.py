@@ -13,7 +13,6 @@ from agents.news_agent import NewsSummariser
 from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, load_evidence
 from tools.free_news import FreeNewsClient
 from tools.local_llm import LocalLLM
-from tools.pdf_fetcher import fetch_cited_pages
 from tools.pdf_summarizer import PDFSummarizer
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
 from tools.sensitivity import run_sensitivity
@@ -24,34 +23,6 @@ T = TypeVar("T")
 
 # Analyses are cached per (bank, question, uploaded PDF); keep only the most recent ones.
 MAX_CACHE_ENTRIES = 64
-
-ROOT = Path(__file__).resolve().parent
-
-
-def code_fingerprint(paths: Optional[List[Path]] = None) -> str:
-    """Hash of the backend code and data files.
-
-    The Streamlit app keys its cached ``Server`` on this value, so a redeploy
-    that changes code, the evidence table or the AI review file builds a new
-    ``Server`` instead of reusing one created from the previous version.
-    """
-    if paths is None:
-        paths = (
-            [ROOT / "server.py"]
-            + sorted((ROOT / "tools").glob("*.py"))
-            + sorted((ROOT / "agents").glob("*.py"))
-            + sorted((ROOT / "data" / "evidence").glob("*"))
-        )
-    digest = hashlib.sha256()
-    for path in paths:
-        if path.is_file():
-            digest.update(str(path.relative_to(path.anchor)).encode())
-            digest.update(path.read_bytes())
-    return digest.hexdigest()[:16]
-
-
-# Fingerprint of the files this module was imported from (see app_v2.py).
-LOADED_FINGERPRINT = code_fingerprint()
 
 
 class Server:
@@ -245,23 +216,25 @@ class Server:
     ) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "enabled": True,
+            "model": self.llm.describe(),
             "error": None,
             "news_summary": "",
             "pdf_summary": "",
             "analysis_text": "",
             "suggestions": [],
             "rejected": {},
+            "ai_estimate": None,
             "report": "",
         }
         try:
             if news_items:
                 out["news_summary"] = self.news_agent.summarise(bank, news_items)
-            # An uploaded PDF is summarised as is; otherwise only the pages the evidence cites.
-            report_text = pdf_text or fetch_cited_pages(self.evidence, bank)
-            if report_text:
-                out["pdf_summary"] = self.pdf_summarizer.summarize(report_text, bank=bank, year=REPORTING_YEAR)
+            if pdf_text:  # a PDF uploaded by the user
+                out["pdf_summary"] = self.pdf_summarizer.summarize(pdf_text, bank=bank, year=REPORTING_YEAR)
 
-            context = self._build_context_blob(yahoo_snapshot, out["news_summary"], out["pdf_summary"], question)
+            context = self._build_context_blob(
+                self._evidence_text(bank), yahoo_snapshot, out["news_summary"], out["pdf_summary"], question
+            )
             esg = self.esg_agent.run(bank=bank, question=question, context_blob=context)
             out["analysis_text"] = esg["analysis_text"]
             out["rejected"] = esg["rejected"]
@@ -278,6 +251,7 @@ class Server:
                         "agrees": suggestion == evidence_categories[key],
                     }
                 )
+            out["ai_estimate"] = self._ai_estimate(bank, esg["suggestions"])
 
             out["report"] = self.writer.run(
                 bank=bank,
@@ -290,6 +264,42 @@ class Server:
         return out
 
     # Helpers
+    def _evidence_text(self, bank: str) -> str:
+        """The bank's evidence rows as plain text for the assistant."""
+        lines = []
+        for key, row in self.evidence.for_bank(bank).items():
+            label = RUBRIC_BY_KEY[key].label if key in RUBRIC_BY_KEY else "Controversy"
+            lines.append(
+                f"- {label} ({key}): analyst category `{row.category}`. Evidence ({row.source_document}, "
+                f"{row.page_label}): {row.evidence_summary} Notes: {row.notes or 'none'}"
+            )
+        return "\n".join(lines)
+
+    def _ai_estimate(self, bank: str, suggestions: Dict[str, str]) -> Dict[str, Any]:
+        """Score the AI's suggested categories with the same engine (advisory, never the official score).
+
+        Indicators the AI did not classify keep the evidence category.
+        """
+        evidence_categories = self.evidence.categories(bank)
+        categories = {**evidence_categories, **suggestions}
+        result = self.engine.score(categories, bank=bank).to_dict()
+        result.pop("indicators")
+        changed = [
+            {
+                "indicator": key,
+                "label": RUBRIC_BY_KEY[key].label if key in RUBRIC_BY_KEY else "Controversy",
+                "evidence_category": evidence_categories[key],
+                "ai_category": categories[key],
+            }
+            for key in ALL_KEYS
+            if categories[key] != evidence_categories[key]
+        ]
+        return {
+            "scores": result,
+            "changed": changed,
+            "kept_from_evidence": [key for key in ALL_KEYS if key not in suggestions],
+        }
+
     def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         if key not in self.cache:
             return None
@@ -317,6 +327,7 @@ class Server:
 
     @staticmethod
     def _build_context_blob(
+        evidence_text: str,
         yahoo_snapshot: str,
         news_summary: str,
         pdf_summary: str,
@@ -326,9 +337,10 @@ class Server:
         return (
             f"Assessment period: {REPORTING_YEAR}\n"
             f"{focus}"
-            f"--- Yahoo Snapshot ---\n{yahoo_snapshot or 'N/A'}\n\n"
+            f"--- Reviewed evidence from the annual report (one row per indicator) ---\n{evidence_text}\n\n"
             f"--- ESG News Summary ---\n{news_summary or 'N/A'}\n\n"
-            f"--- Annual Report Summary ---\n{pdf_summary or 'N/A'}\n"
+            f"--- Summary of a PDF uploaded by the user ---\n{pdf_summary or 'N/A'}\n\n"
+            f"--- Yahoo Snapshot ---\n{yahoo_snapshot or 'N/A'}\n"
         )
 
     @staticmethod
