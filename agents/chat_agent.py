@@ -85,6 +85,7 @@ class ChatAgent:
         self.engine = engine
         self.ai_reviewer_categories = ai_reviewer_categories
         self.definitions = definitions
+        self.reviewer_note = "AI reviewer: categories chosen by an AI review of the cited pages."
 
     # Step 1: route
     def route(self, question: str, history: Sequence[Tuple[str, str]] = ()) -> Route:
@@ -237,10 +238,9 @@ class ChatAgent:
             "- Use only the EVIDENCE and SCORES below. Do not use outside knowledge.\n"
             "- Cite the bank and page for every fact from the evidence, like (ING Group, p. 111).\n"
             "- Every number you mention must appear in the SCORES or EVIDENCE. Never compute or estimate a score.\n"
-            "- The official score comes from the analysts' evidence table. The AI reviewer score uses the categories "
-            "an offline AI review chose after reading each cited page; that review was shown the analysts' category, "
-            "so call it a second opinion, not an independent rating. A scenario score is hypothetical, computed by "
-            "the scoring engine from the listed category changes.\n"
+            "- The official score comes from the analysts' evidence table. "
+            f"The AI reviewer score is the same engine applied to other categories ({self.reviewer_note}) "
+            "A scenario score is hypothetical, computed by the scoring engine from the listed category changes.\n"
             "- For a what-if question, say which categories change and what the scenario score is.\n"
             "- If the evidence does not answer the question, say so plainly."
         )

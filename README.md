@@ -100,7 +100,7 @@ A tie between banks counts as a ranking change.
 1. **Understand the question** (one short LLM call): which banks and indicators it is about, and for a what-if question, which rubric categories would change. Every value is checked against the rubric; anything else is dropped and reported.
 2. **Compute the scores** (no LLM):
    - the official score;
-   - the **AI reviewer score**: the same engine applied to the categories the offline AI evidence review chose (section 8). That review read each cited page but was also shown the analysts' category, so it is a second opinion rather than a blind rating; it chose a different category on 6 of 45 rows;
+   - the **AI reviewer score**: the same engine applied to the categories of the **blind AI review** (section 8), which rated each row from the report pages and the written definitions only, without seeing the analysts' categories;
    - for what-if questions, a **scenario score** and any change in the ranking.
 3. **Answer** (one streamed LLM call): the model may use only the evidence rows, verbatim quotes and computed scores, and must cite pages. Page citations that are not in the evidence it was given are flagged under the answer.
 
@@ -114,6 +114,9 @@ Each answer comes with a score card and the verbatim quotes it could use. The mo
 - For each row, an LLM is given the cited PDF page (and no other page), the analysts' summary and category, and the written definitions. It answers three things: does the page support the evidence summary; which category it would assign; which passage backs its answer. Because it sees the analysts' category, its category is a second opinion rather than a blind rating.
 - The passage must be quoted verbatim, and the code checks that it really appears on the page, so an invented quote is flagged rather than trusted.
 - Results are saved in `data/evidence/ai_review.csv` and shown in the app as "AI check, not used in score". Disagreements are prompts to re-check a row; they never change a category.
+- **Blind review** (`python -m scripts.review_evidence --blind`, code in [`tools/blind_review.py`](tools/blind_review.py)): a second pass in which the prompt contains only the indicator, the category definitions and the text of the pages the row quotes. There is no analysts' category or summary, and the bank isn't named.
+  - Run on 18 October 2026 with `gemma4:31b`, it chose the analysts' category on **43 of 45 rows**. The review that was shown the analysts' category agreed on 39, but it also saw fewer pages, so the two figures are not a clean measure of anchoring.
+  - The two disagreements (both Rabobank) are listed in [`docs/blind_review.md`](docs/blind_review.md) and decided in the re-check worksheet. Results are saved in `data/evidence/ai_blind_review.csv`.
 - The client in [`tools/llm_provider.py`](tools/llm_provider.py) works with any OpenAI-compatible API: Ollama Cloud by default, or Gemini, Groq or a local Ollama by configuration.
 
 ## Screenshots
@@ -158,7 +161,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example). On Streamlit Community Cloud, add `OLLAMA_API_KEY` under the app's **Settings → Secrets** instead of a `.env` file.
 
-To run the tests (126 tests, no LLM or network needed):
+To run the tests (132 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -195,7 +198,7 @@ python -m scripts.scoring_options --write
   - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
 - **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
 - **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
-- **AI assistant.** Its answers come from a language model and can be wrong or incomplete, even though the scores are computed by code and citations outside the evidence are flagged. The AI reviewer score reflects one model reading one page per row, after being shown the analysts' category. Both are advisory and never used for the official scores.
+- **AI assistant.** Its answers come from a language model and can be wrong or incomplete, even though the scores are computed by code and citations outside the evidence are flagged. The AI reviewer score reflects one model reading the quoted pages of each row; it can miss evidence elsewhere in the report and applies the definitions literally (e.g. it counted a 2023 competition-law fine against Rabobank as a FY2025 ESG controversy). Both are advisory and never used for the official scores.
 - **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
 
 ## Project structure
@@ -211,6 +214,7 @@ python -m scripts.scoring_options --write
 │   ├── evidence.py              # Loads and validates the evidence table
 │   ├── sensitivity.py           # Weight and judgment sensitivity analysis
 │   ├── ai_review.py             # AI evidence review: prompts, quote check, results file
+│   ├── blind_review.py          # Blind AI review: rates each row without the analysts' category
 │   ├── llm_provider.py          # OpenAI-compatible client (Ollama Cloud, Gemini, Groq, local Ollama)
 │   ├── local_llm.py             # AI assistant client (Ollama Cloud or local Ollama; temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
@@ -222,6 +226,7 @@ python -m scripts.scoring_options --write
 │   ├── esg_evidence.csv         # 45 confirmed evidence rows, each with a verbatim quote
 │   ├── quote_check.csv          # Result of checking every quote against its PDF page
 │   ├── ai_review.csv            # Offline AI evidence review results
+│   ├── ai_blind_review.csv      # Blind AI review results (used for the AI reviewer score)
 │   └── category_definitions.md  # Rules for assigning each category
 ├── scripts/
 │   ├── review_evidence.py       # Offline AI evidence review
@@ -230,7 +235,8 @@ python -m scripts.scoring_options --write
 ├── tests/                       # pytest suite
 ├── docs/
 │   ├── ESG_FIX_SPEC.md          # Revision specification
-│   ├── evidence_recheck.md      # Re-check worksheet for the 17 flagged rows
+│   ├── evidence_recheck.md      # Re-check worksheet for the 17 flagged rows and the blind review
+│   ├── blind_review.md          # Generated: blind AI review agreement and disagreements
 │   ├── scoring_options.md       # Generated by scripts/scoring_options.py
 │   └── screenshots/
 ├── requirements.txt

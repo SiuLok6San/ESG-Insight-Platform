@@ -2,6 +2,10 @@
 
 ## October 2026: after the revision
 
+- **Blind AI review** (`tools/blind_review.py`, `python -m scripts.review_evidence --blind`). The model rates each row from the quoted report pages and the written definitions only, without the analysts' category or summary, and the prompt doesn't name the bank. Its quotes are checked against the pages as before.
+  - Result with gemma4:31b: same category as the analysts on 43 of 45 rows; quotes found for 43 of 45.
+  - The two disagreements (Rabobank board independence and controversy) are in `docs/blind_review.md` and the re-check worksheet. No category was changed.
+  - The chat's AI reviewer score now uses these blind ratings instead of the review that was shown the analysts' categories.
 - **AI assistant rebuilt as a chat** (`agents/chat_agent.py`), now the first page of the app. A short LLM call maps the question to banks, indicators and, for what-if questions, rubric category changes (all validated against the rubric). The scoring engine then computes the official score, an AI reviewer score (the engine applied to the offline AI review's own categories; a second opinion, since that review was shown the analysts' categories) and the scenario score. A second, streamed LLM call answers using only the evidence rows, verbatim quotes and those scores, and page citations outside the evidence are flagged. In a live test the first words appeared after about 3 seconds (previously about 45-55 seconds for a full answer). Follow-up questions use the last two turns.
 - **Removed:** the old per-question "AI estimate" (its prompt showed the model the analysts' categories, so it nearly always agreed with them); the news, market-data and uploaded-PDF summaries, which were not part of the reviewed evidence; and the `feedparser` and `yfinance` dependencies.
 - **Fixed during live testing:** streamed text is decoded as UTF-8 ("1.5°C" was shown as "1.5Â°C"); a question naming no bank now covers all three banks instead of the bank from the previous question; pillar scores given to the model are rounded half-up like on the page (84.3, not 84.2).

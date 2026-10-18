@@ -313,10 +313,8 @@ def render_score_card(view: Dict[str, Any]) -> None:
             + ")."
         )
     st.caption(
-        "Official: the analysts' evidence table. AI reviewer: the categories an offline AI review chose after "
-        "reading each cited page; it was shown the analysts' category, so it is a second opinion, not a blind "
-        "rating. Scenario: hypothetical, computed by the same scoring engine from the category changes listed. "
-        "Only the official score is used in the benchmark."
+        f"Official: the analysts' evidence table. {server.ai_reviewer_note()} Scenario: hypothetical, computed by "
+        "the same scoring engine from the category changes listed. Only the official score is used in the benchmark."
     )
     differs = [(c["bank"], d) for c in cards for d in c["ai_reviewer_differs"]]
     if differs:

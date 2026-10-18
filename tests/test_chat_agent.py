@@ -53,7 +53,7 @@ def test_scores_come_from_the_engine_not_the_model(agent):
     assert card.scenario_changes == [("exec_comp_esg", "none", ">=20")]
     reviewer = {**cats, **agent.ai_reviewer_categories["ABN AMRO"]}
     assert card.ai_reviewer.final == agent.engine.score(reviewer).final
-    assert {k for k, _, _ in card.ai_reviewer_differs} == {"diversity_inclusion", "labor_rights"}
+    assert {k for k, _, _ in card.ai_reviewer_differs} == {k for k in reviewer if reviewer[k] != cats[k]}
     facts = agent.facts(ctx)
     assert f"Scenario score {card.scenario.final:.1f}" in facts and "official 68.6" in facts
     assert "ESG-linked executive pay (exec_comp_esg)" in ctx.evidence_text  # the scenario's indicator is shown

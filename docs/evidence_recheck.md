@@ -223,3 +223,13 @@ why the recommendation is to apply any such change from the next reporting year.
   no number is stated (D2). See `docs/scoring_options.md`, section 1.
 - Every one of the 45 rows now has at least one verbatim excerpt from its cited page (88 excerpts in total,
   all found on their pages).
+
+## Blind AI review (18 October 2026)
+
+A second AI pass rated every row without seeing the analysts' category or summary (see
+[`docs/blind_review.md`](blind_review.md)). It agreed on 43 of 45 rows. The two disagreements:
+
+| # | Row | Analysts | Blind AI | Finding | Recommendation | Decision |
+|---|---|---|---|---|---|---|
+| B1 | Rabobank board independence | `>=50` | `not_disclosed` | Same point as D2: p. 172 confirms compliance with Dutch Corporate Governance Code provisions 2.1.7-2.1.9 but gives no count. | Already decided under D2 (keep `>=50`). | keep `>=50` (D2) |
+| B2 | Rabobank controversy | `moderate` | `severe` | The blind AI counted the EUR 26.6 m European Commission fine on p. 327. The same page dates it to a press release of 22 November 2023, outside FY2025, and it concerns EU competition law, which is not ESG-related under the agreed definition (climate or environment, financial crime, customer harm, human rights). The row's notes already record this. | Keep `moderate`. | |

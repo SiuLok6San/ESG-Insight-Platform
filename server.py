@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 from agents.chat_agent import ChatAgent, ChatContext
 from agents.final_writer import FinalWriterAgent
 from tools.ai_review import REVIEW_PATH, load_definitions, load_reviews, summarise
+from tools.blind_review import BLIND_REVIEW_PATH, load_results as load_blind_results
 from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, EvidenceRow, load_evidence
 from tools.local_llm import LLMUnavailable, LocalLLM
 from tools.quota import DailyLimitReached, DailyQuota
@@ -54,6 +55,7 @@ class Server:
         use_llm: Optional[bool] = None,
         evidence_path: Path | str = EVIDENCE_PATH,
         review_path: Path | str = REVIEW_PATH,
+        blind_review_path: Path | str = BLIND_REVIEW_PATH,
         engine_config: Optional[ScoreEngineConfig] = None,
         daily_ai_limit: Optional[int] = None,
     ) -> None:
@@ -70,12 +72,15 @@ class Server:
         self.evidence = load_evidence(evidence_path)
         # Offline AI evidence review (advisory only); empty if it has not been run.
         self.reviews = load_reviews(review_path)
+        # Blind AI review (advisory only): the AI rated each row without seeing the analysts' category.
+        self.blind_reviews = load_blind_results(blind_review_path)
         self.engine = ScoreEngine(engine_config)
         self.llm = LocalLLM()
         self.llm_mode = use_llm
         self.use_llm = False if use_llm is False else self.llm.is_available()
 
         self.chat = ChatAgent(self.llm, self.evidence, self.engine, self.ai_reviewer_categories(), load_definitions())
+        self.chat.reviewer_note = self.ai_reviewer_note()
         self.writer = FinalWriterAgent(self.llm)
         self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         if daily_ai_limit is None:
@@ -130,13 +135,33 @@ class Server:
         }
 
     def ai_reviewer_categories(self) -> Dict[str, Dict[str, str]]:
-        """The offline AI reviewer's own category for each row (only valid rubric values)."""
+        """The AI reviewer's own category for each row (only valid rubric values).
+
+        Taken from the blind AI review when it has been run, otherwise from the
+        AI evidence review, which was shown the analysts' category.
+        """
+        if self.blind_reviews:
+            source, field_name = self.blind_reviews, "ai_category"
+        else:
+            source, field_name = self.reviews, "ai_suggested_category"
         categories: Dict[str, Dict[str, str]] = {}
-        for (bank, key), review in self.reviews.items():
-            category = review.get("ai_suggested_category")
+        for (bank, key), review in source.items():
+            category = review.get(field_name)
             if category in allowed_categories(key):
                 categories.setdefault(bank, {})[key] = category
         return categories
+
+    def ai_reviewer_note(self) -> str:
+        """One sentence on where the AI reviewer score comes from, for the page and the chat prompt."""
+        if self.blind_reviews:
+            return (
+                "AI reviewer: categories an AI chose blind, from the report pages and the written definitions only; "
+                "it did not see the analysts' categories."
+            )
+        return (
+            "AI reviewer: categories an offline AI review chose after reading each cited page; it was shown the "
+            "analysts' category, so it is a second opinion, not a blind rating."
+        )
 
     def chat_turn(self, question: str, history: Sequence[Tuple[str, str]] = ()) -> ChatTurn:
         """Prepare an answer: route the question and compute the scores.
