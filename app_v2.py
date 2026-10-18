@@ -255,15 +255,16 @@ def render_assistant(assistant: Dict[str, Any], official: Dict[str, Any]) -> Non
     if estimate:
         st.markdown("**AI estimate vs official score**")
         ai = estimate["scores"]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Official score (evidence)", f"{official['final']:.1f}", help=official["label"])
+        c1, c2 = st.columns(2)
+        c1.metric("Official score (evidence)", f"{official['final']:.1f}")
         c2.metric(
             "AI estimate (not official)",
             f"{ai['final']:.1f}",
             delta=f"{ai['final'] - official['final']:+.1f}",
             delta_color="off",
         )
-        c3.metric("AI estimate label", ai["label"])
+        # Labels as plain text: metric values are cut off with "..." in narrow columns.
+        st.markdown(f"Compliance label: official **{official['label']}** · AI estimate **{ai['label']}**")
         if estimate["changed"]:
             st.dataframe(
                 pd.DataFrame(

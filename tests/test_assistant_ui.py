@@ -54,6 +54,8 @@ def test_answer_and_ai_estimate_are_shown_without_writing_the_report(llm):
     metrics = {m.label: m.value for m in at.metric}
     assert metrics["Official score (evidence)"] == "74.7"
     assert "AI estimate (not official)" in metrics
+    labels = [m.value for m in at.markdown if m.value.startswith("Compliance label: official")]
+    assert labels and "**Almost Meet**" in labels[0]  # full label, not a truncated metric value
     assert llm.kinds.count("answer") == 1 and "report" not in llm.kinds
     assert "Questions left in this session: 4 of 5" in captions(at)
     assert "AI requests left today for the whole site: 49 of 50" in captions(at)
