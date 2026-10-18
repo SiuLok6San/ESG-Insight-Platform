@@ -7,7 +7,7 @@ One turn has three steps:
    would change. Every value is checked against the rubric; anything else is
    dropped and reported.
 2. **Compute** (no LLM): official scores from the evidence table, the AI
-   reviewer's independent score, and the scenario score, all from the same
+   reviewer's score (a second opinion), and the scenario score, all from the same
    scoring engine. The model never produces a number.
 3. **Answer** (one streamed LLM call): plain-English answer that may use only
    the evidence rows, quotes and scores computed in step 2, citing pages.
@@ -237,9 +237,10 @@ class ChatAgent:
             "- Use only the EVIDENCE and SCORES below. Do not use outside knowledge.\n"
             "- Cite the bank and page for every fact from the evidence, like (ING Group, p. 111).\n"
             "- Every number you mention must appear in the SCORES or EVIDENCE. Never compute or estimate a score.\n"
-            "- The official score comes from the analysts' evidence table. The AI reviewer score is an independent "
-            "AI reading of the cited pages. A scenario score is hypothetical, computed by the scoring engine from "
-            "the listed category changes.\n"
+            "- The official score comes from the analysts' evidence table. The AI reviewer score uses the categories "
+            "an offline AI review chose after reading each cited page; that review was shown the analysts' category, "
+            "so call it a second opinion, not an independent rating. A scenario score is hypothetical, computed by "
+            "the scoring engine from the listed category changes.\n"
             "- For a what-if question, say which categories change and what the scenario score is.\n"
             "- If the evidence does not answer the question, say so plainly."
         )

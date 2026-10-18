@@ -100,7 +100,7 @@ A tie between banks counts as a ranking change.
 1. **Understand the question** (one short LLM call): which banks and indicators it is about, and for a what-if question, which rubric categories would change. Every value is checked against the rubric; anything else is dropped and reported.
 2. **Compute the scores** (no LLM):
    - the official score;
-   - the **AI reviewer score**: the same engine applied to the categories the offline AI evidence review chose (section 8), an independent reading of the cited pages;
+   - the **AI reviewer score**: the same engine applied to the categories the offline AI evidence review chose (section 8). That review read each cited page but was also shown the analysts' category, so it is a second opinion rather than a blind rating; it chose a different category on 6 of 45 rows;
    - for what-if questions, a **scenario score** and any change in the ranking.
 3. **Answer** (one streamed LLM call): the model may use only the evidence rows, verbatim quotes and computed scores, and must cite pages. Page citations that are not in the evidence it was given are flagged under the answer.
 
@@ -111,7 +111,7 @@ Each answer comes with a score card and the verbatim quotes it could use. The mo
 - A narrative report for one bank can be written on request from the Single bank page.
 
 **8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
-- For each row, an LLM reads only the cited PDF page and answers three things: does the page support the evidence summary; which category it would assign from the written definitions; which passage backs its answer.
+- For each row, an LLM is given the cited PDF page (and no other page), the analysts' summary and category, and the written definitions. It answers three things: does the page support the evidence summary; which category it would assign; which passage backs its answer. Because it sees the analysts' category, its category is a second opinion rather than a blind rating.
 - The passage must be quoted verbatim, and the code checks that it really appears on the page, so an invented quote is flagged rather than trusted.
 - Results are saved in `data/evidence/ai_review.csv` and shown in the app as "AI check, not used in score". Disagreements are prompts to re-check a row; they never change a category.
 - The client in [`tools/llm_provider.py`](tools/llm_provider.py) works with any OpenAI-compatible API: Ollama Cloud by default, or Gemini, Groq or a local Ollama by configuration.
@@ -195,7 +195,7 @@ python -m scripts.scoring_options --write
   - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
 - **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
 - **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
-- **AI assistant.** Its answers come from a language model and can be wrong or incomplete, even though the scores are computed by code and citations outside the evidence are flagged. The AI reviewer score reflects one model reading one page per row. Both are advisory and never used for the official scores.
+- **AI assistant.** Its answers come from a language model and can be wrong or incomplete, even though the scores are computed by code and citations outside the evidence are flagged. The AI reviewer score reflects one model reading one page per row, after being shown the analysts' category. Both are advisory and never used for the official scores.
 - **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
 
 ## Project structure
