@@ -6,8 +6,9 @@ not be found on the page (some rows have more than one flag). For each row, the 
 pages were re-read on 18 October 2026. Every quote below is verbatim and was checked by
 `scripts/verify_quotes.py` against the PDF page it names.
 
-**No category has been changed.** The two project analysts decide each point in the
-*Decisions* section at the end; categories change only after that.
+**No category has been changed.** The two project analysts decided each point in the
+*Decisions* section at the end on 18 October 2026: every recommendation was accepted, so all 45
+categories stay as confirmed, and only one summary (D5) and one note (D6) were edited.
 
 ## Summary
 
@@ -205,12 +206,12 @@ options changes a compliance label or the ranking.
 
 | # | Question | Recommended | Alternative and effect | Decision |
 |---|---|---|---|---|
-| D1 | Rabobank climate risk management | keep `strong` | `full`: Rabobank 72.3 -> 71.5 | |
-| D2 | Rabobank board independence | keep `>=50` | `not_disclosed`: Rabobank 72.3 -> 69.2 | |
-| D3 | Should `strong` risk management require disclosed quantified limits or KRIs? | no change now; consider it from the next reporting year | yes: ING 74.7 -> 74.0 and Rabobank 72.3 -> 71.5 (only ABN AMRO discloses quantified KRIs) | |
-| D4 | Score the three numeric indicators continuously instead of in bands? | no: the effect is at most ±0.2 points and it adds a new convention (band midpoints) | yes: ING 74.9, ABN AMRO 68.8, Rabobank 72.1 | |
-| D5 | Rabobank labour rights summary says Rabobank "is not aware of severe human-rights incidents"; p. 128 says it has "no internal registration of severe human rights issues and incidents ... given that such complaints are not received" | reword to: "it has no registration of severe human-rights incidents in its Dutch workforce, as no such complaints were received" | keep the current wording | |
-| D6 | ING climate risk management notes | add "ESG Risk Committee described on p. 102." | leave the notes as they are | |
+| D1 | Rabobank climate risk management | keep `strong` | `full`: Rabobank 72.3 -> 71.5 | keep `strong` (decided 18 Oct 2026) |
+| D2 | Rabobank board independence | keep `>=50` | `not_disclosed`: Rabobank 72.3 -> 69.2 | keep `>=50` (decided 18 Oct 2026) |
+| D3 | Should `strong` risk management require disclosed quantified limits or KRIs? | no change now; consider it from the next reporting year | yes: ING 74.7 -> 74.0 and Rabobank 72.3 -> 71.5 (only ABN AMRO discloses quantified KRIs) | no change now (decided 18 Oct 2026) |
+| D4 | Score the three numeric indicators continuously instead of in bands? | no: the effect is at most ±0.2 points and it adds a new convention (band midpoints) | yes: ING 74.9, ABN AMRO 68.8, Rabobank 72.1 | not adopted (decided 18 Oct 2026) |
+| D5 | Rabobank labour rights summary says Rabobank "is not aware of severe human-rights incidents"; p. 128 says it has "no internal registration of severe human rights issues and incidents ... given that such complaints are not received" | reword to: "it has no registration of severe human-rights incidents in its Dutch workforce, as no such complaints were received" | keep the current wording | reworded (applied 18 Oct 2026) |
+| D6 | ING climate risk management notes | add "ESG Risk Committee described on p. 102." | leave the notes as they are | note added (applied 18 Oct 2026) |
 
 Changing the definition of a category after seeing the results (D3) would look like tuning, which is
 why the recommendation is to apply any such change from the next reporting year.
