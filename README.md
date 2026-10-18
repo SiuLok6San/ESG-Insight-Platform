@@ -4,7 +4,7 @@
 
 An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
-**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). On the Single bank page you can ask the AI assistant a question about a bank (5 questions per visit). If the app has been idle, it may take about 30 seconds to wake up.
+**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). On the Single bank page you can ask the AI assistant a question about a bank (5 questions per visit, and 50 AI requests per day for the whole site). If the app has been idle, it may take about 30 seconds to wake up.
 
 ## Context
 
@@ -94,7 +94,8 @@ A tie between banks counts as a ranking change.
 
 **7. Optional AI assistant.** On the Single bank page, a user can ask a question about a bank. An LLM (Ollama Cloud `gemma4:31b` online, or a local Ollama server) answers from the reviewed evidence table, recent news and market data, and an optional uploaded PDF, citing report pages. It also suggests categories for the indicators.
 - It never changes the official score. The categories it suggests are scored with the same engine and shown separately as "AI estimate (not official)", with a list of the indicators where it disagrees with the evidence. Indicators it does not classify keep the evidence category.
-- The online demo allows 5 questions per visit, to stay within the free API quota.
+- A narrative report is written only when the user clicks **Write an AI narrative report**, so a question needs two model calls (news summary and answer) instead of three. In one timed run on 18 October 2026, a new question took about 55 seconds and a report about 41 seconds.
+- To stay within the free API quota, the online demo allows 5 questions per visit and 50 AI requests per day for the whole site (questions and reports together). The per-visit limit resets when the page is reloaded; the daily limit does not, and resets at midnight UTC or when the app restarts. Answers served from the cache do not count.
 - Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 
 **8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
@@ -145,7 +146,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example). On Streamlit Community Cloud, add `OLLAMA_API_KEY` under the app's **Settings → Secrets** instead of a `.env` file.
 
-To run the tests (93 tests, no LLM or network needed):
+To run the tests (106 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -193,6 +194,7 @@ python -m scripts.review_evidence
 │   ├── local_llm.py             # AI assistant client (Ollama Cloud or local Ollama; temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
 │   ├── pdf_summarizer.py        # LLM report summary (advisory only)
+│   ├── quota.py                 # Site-wide daily cap on AI requests
 │   ├── free_news.py             # Google News RSS (context only)
 │   ├── yahoo_client.py          # Yahoo Finance snapshot (context only)
 │   ├── dutch_banks.py           # Bank names and aliases

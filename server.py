@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import os
 from collections import OrderedDict
 from dataclasses import asdict
 from pathlib import Path
@@ -12,8 +13,9 @@ from agents.final_writer import FinalWriterAgent
 from agents.news_agent import NewsSummariser
 from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, load_evidence
 from tools.free_news import FreeNewsClient
-from tools.local_llm import LocalLLM
+from tools.local_llm import LLMUnavailable, LocalLLM
 from tools.pdf_summarizer import PDFSummarizer
+from tools.quota import DailyLimitReached, DailyQuota
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, RUBRIC_BY_KEY, ScoreEngine, ScoreEngineConfig
 from tools.sensitivity import run_sensitivity
 from tools.ai_review import REVIEW_PATH, load_reviews, summarise
@@ -32,9 +34,11 @@ class Server:
     1. Scores: evidence table -> ScoreEngine. Deterministic, offline, and
        identical with or without the LLM.
     2. Context (optional): Yahoo Finance snapshot and Google News RSS headlines.
-    3. AI assistant (optional, advisory): the local LLM summarises the annual
-       report and news, suggests rubric categories and writes a narrative.
-       Its output is shown separately and never changes a score.
+    3. AI assistant (optional, advisory): the LLM answers a question from the
+       evidence and news and suggests rubric categories; a narrative report
+       is written only on request. Its output is shown separately and never
+       changes a score. Uncached AI requests count against a site-wide
+       daily limit (``AI_QUESTIONS_PER_DAY``, default 50).
     """
 
     def __init__(
@@ -44,6 +48,7 @@ class Server:
         evidence_path: Path | str = EVIDENCE_PATH,
         review_path: Path | str = REVIEW_PATH,
         engine_config: Optional[ScoreEngineConfig] = None,
+        daily_ai_limit: Optional[int] = None,
     ) -> None:
         """
         Parameters
@@ -53,6 +58,9 @@ class Server:
             if the local Ollama server is reachable.
         fetch_external : bool
             Fetch Yahoo Finance and Google News context (network access).
+        daily_ai_limit : int, optional
+            AI requests allowed per UTC day for all visitors together. Defaults
+            to the ``AI_QUESTIONS_PER_DAY`` environment variable, else 50.
         """
         self.evidence = load_evidence(evidence_path)
         # Offline AI evidence review (advisory only); empty if it has not been run.
@@ -70,6 +78,9 @@ class Server:
         self.esg_agent = ESGAgent(self.llm)
         self.writer = FinalWriterAgent(self.llm)
         self.cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
+        if daily_ai_limit is None:
+            daily_ai_limit = int(os.getenv("AI_QUESTIONS_PER_DAY", "50"))
+        self.ai_quota = DailyQuota(daily_ai_limit)
 
     # Public API
     def refresh_llm_status(self) -> bool:
@@ -123,11 +134,18 @@ class Server:
         pdf_text: Optional[str] = None,
         pdf_filename: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Full analysis for one bank: scores, optional context, optional AI assistant."""
-        cache_key = f"{bank}:{self._hash(question)}:{self._hash(pdf_text)}"
+        """Full analysis for one bank: scores, optional context, optional AI assistant.
+
+        A cached analysis is returned without using the daily AI limit; a new
+        one with the AI assistant raises ``DailyLimitReached`` once the limit
+        is used up.
+        """
+        cache_key = self._analysis_key(bank, question, pdf_text)
         cached = self._cache_get(cache_key)
         if cached is not None:
             return cached
+        if self.use_llm and not self.ai_quota.try_consume():
+            raise DailyLimitReached(self.ai_quota.limit)
 
         scored = self.score_bank(bank)
 
@@ -138,7 +156,7 @@ class Server:
             news_items = self._safe(lambda: self.news_client.search(bank, limit=10), [], "News fetch")
 
         if self.use_llm:
-            assistant = self._run_assistant(bank, question, pdf_text, news_items, yahoo_snapshot, scored)
+            assistant = self._run_assistant(bank, question, pdf_text, news_items, yahoo_snapshot)
         else:
             assistant = {"enabled": False}
 
@@ -154,6 +172,32 @@ class Server:
         }
         self._cache_put(cache_key, result)
         return result
+
+    def has_cached_analysis(self, bank: str, question: Optional[str] = None, pdf_text: Optional[str] = None) -> bool:
+        return self._analysis_key(bank, question, pdf_text) in self.cache
+
+    def write_report(self, bank: str, news_summary: str = "") -> str:
+        """Narrative report, written only on request (one AI request, cached per bank and news summary)."""
+        cache_key = self._report_key(bank, news_summary)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached["report"]
+        if not self.use_llm:
+            raise LLMUnavailable("The AI assistant is off")
+        if not self.ai_quota.try_consume():
+            raise DailyLimitReached(self.ai_quota.limit)
+        scored = self.score_bank(bank)
+        report = self.writer.run(
+            bank=bank, scores=scored["scores"], breakdown=scored["breakdown"], news_summary=news_summary
+        )
+        self._cache_put(cache_key, {"report": report})
+        return report
+
+    def has_cached_report(self, bank: str, news_summary: str = "") -> bool:
+        return self._report_key(bank, news_summary) in self.cache
+
+    def ai_requests_left_today(self) -> int:
+        return self.ai_quota.remaining()
 
     def compare_banks(self, banks: List[str]) -> Dict[str, Any]:
         """Rank banks by their evidence-based scores (offline and deterministic)."""
@@ -212,7 +256,6 @@ class Server:
         pdf_text: Optional[str],
         news_items: List[Dict[str, str]],
         yahoo_snapshot: str,
-        scored: Dict[str, Any],
     ) -> Dict[str, Any]:
         out: Dict[str, Any] = {
             "enabled": True,
@@ -224,7 +267,6 @@ class Server:
             "suggestions": [],
             "rejected": {},
             "ai_estimate": None,
-            "report": "",
         }
         try:
             if news_items:
@@ -252,13 +294,6 @@ class Server:
                     }
                 )
             out["ai_estimate"] = self._ai_estimate(bank, esg["suggestions"])
-
-            out["report"] = self.writer.run(
-                bank=bank,
-                scores=scored["scores"],
-                breakdown=scored["breakdown"],
-                news_summary=out["news_summary"],
-            )
         except Exception as exc:  # the assistant is optional; scores are unaffected
             out["error"] = str(exc)
         return out
@@ -299,6 +334,12 @@ class Server:
             "changed": changed,
             "kept_from_evidence": [key for key in ALL_KEYS if key not in suggestions],
         }
+
+    def _analysis_key(self, bank: str, question: Optional[str], pdf_text: Optional[str]) -> str:
+        return f"{bank}:{self._hash(question)}:{self._hash(pdf_text)}"
+
+    def _report_key(self, bank: str, news_summary: str) -> str:
+        return f"report:{bank}:{self._hash(news_summary)}"
 
     def _cache_get(self, key: str) -> Optional[Dict[str, Any]]:
         if key not in self.cache:

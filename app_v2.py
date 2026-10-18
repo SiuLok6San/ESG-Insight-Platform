@@ -55,6 +55,7 @@ drop_stale_backend(BACKEND_FINGERPRINT)
 
 from server import Server  # noqa: E402  (imported after the stale-module check)
 from tools.evidence import REPORTING_YEAR  # noqa: E402
+from tools.quota import DailyLimitReached  # noqa: E402
 from tools.radar_chart import create_esg_radar_chart  # noqa: E402
 from tools.score_engine import PILLAR_NAMES  # noqa: E402
 
@@ -79,7 +80,13 @@ def load_secrets_into_env() -> None:
         secrets = {k: st.secrets[k] for k in st.secrets}
     except Exception:  # no secrets file: nothing to load
         return
-    for name in ("OLLAMA_API_KEY", "LLM_PROVIDER", "OLLAMA_CLOUD_MODEL", "AI_QUESTIONS_PER_SESSION"):
+    for name in (
+        "OLLAMA_API_KEY",
+        "LLM_PROVIDER",
+        "OLLAMA_CLOUD_MODEL",
+        "AI_QUESTIONS_PER_SESSION",
+        "AI_QUESTIONS_PER_DAY",
+    ):
         value = secrets.get(name)
         if value and not os.environ.get(name):
             os.environ[name] = str(value)
@@ -223,6 +230,12 @@ def render_breakdown(result: Dict[str, Any]) -> None:
                 st.markdown(f"- **{item['label']}**: {item['notes']}")
 
 
+DAILY_LIMIT_MESSAGE = (
+    "The demo has used its {limit} AI requests for today (shared by all visitors), to stay within the free "
+    "API quota. The limit resets at midnight UTC."
+)
+
+
 def render_assistant(assistant: Dict[str, Any], official: Dict[str, Any]) -> None:
     if not assistant.get("enabled"):
         st.info(
@@ -289,13 +302,40 @@ def render_assistant(assistant: Dict[str, Any], official: Dict[str, Any]) -> Non
                 st.caption(f"AI values outside the rubric were ignored: {assistant['rejected']}")
 
     for title, key in (
-        ("AI narrative report", "report"),
         ("AI summary of the uploaded PDF", "pdf_summary"),
         ("AI summary of ESG news", "news_summary"),
     ):
         if assistant.get(key):
             with st.expander(f"{title} (not used in score)"):
                 st.markdown(assistant[key])
+
+
+def render_report(bank: str, assistant: Dict[str, Any]) -> None:
+    """Narrative report, written only when the visitor asks for it (one extra AI request)."""
+    if not assistant.get("enabled"):
+        return
+    report = st.session_state.get(f"ai_report_{bank}")
+    if report:
+        with st.expander("AI narrative report (not used in score)", expanded=True):
+            st.markdown(report)
+        return
+    news_summary = assistant.get("news_summary", "")
+    no_requests_left = server.ai_requests_left_today() == 0 and not server.has_cached_report(bank, news_summary)
+    if st.button(
+        "Write an AI narrative report",
+        key=f"report_button_{bank}",
+        disabled=no_requests_left,
+        help="Uses one AI request. The report is advisory and not used in score.",
+    ):
+        try:
+            with st.spinner("Writing the report (this can take a minute)..."):
+                st.session_state[f"ai_report_{bank}"] = server.write_report(bank, news_summary)
+        except DailyLimitReached:
+            st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+        except Exception as exc:  # the report is optional; scores are unaffected
+            st.warning(f"The AI report could not be written: {exc}")
+        else:
+            st.rerun()
 
 
 def render_context(result: Dict[str, Any]) -> None:
@@ -567,10 +607,12 @@ else:
     else:
         limit = int(os.getenv("AI_QUESTIONS_PER_SESSION", "5"))
         used = st.session_state.get("ai_questions_used", 0)
+        left_today = server.ai_requests_left_today()
         st.caption(
             f"Model: {server.llm.describe()}. The AI answers from the reviewed evidence above (plus recent news), "
             "suggests rubric categories, and shows the score those categories would give. It never changes the "
-            f"official score. Questions left in this session: {max(limit - used, 0)} of {limit}."
+            f"official score. Questions left in this session: {max(limit - used, 0)} of {limit}. "
+            f"AI requests left today for the whole site: {left_today} of {server.ai_quota.limit}."
         )
         question = st.text_area(
             "Your question",
@@ -581,22 +623,32 @@ else:
         uploaded_pdf = st.file_uploader("Extra PDF for the AI (optional)", type=["pdf"], key=f"pdf_{bank}")
         if used >= limit:
             st.info(f"This demo allows {limit} AI questions per visit, to stay within the free API quota.")
-        if st.button("Ask", type="primary", disabled=used >= limit):
+        elif left_today == 0:
+            st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+        if st.button("Ask", type="primary", disabled=used >= limit or left_today == 0):
             pdf_text = ""
             if uploaded_pdf is not None:
                 from tools.pdf_fetcher import pdf_bytes_to_text
 
                 pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
-            with st.spinner("Asking the AI (this can take 1-2 minutes; repeated questions are faster)..."):
-                st.session_state[f"ai_result_{bank}"] = server.analyze_bank(
-                    bank=bank,
-                    question=question or None,
-                    pdf_text=pdf_text or None,
-                    pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
-                )
-            st.session_state["ai_questions_used"] = used + 1
-            st.rerun()  # redraw so the "questions left" caption shows the new count
+            # A question answered from the cache makes no AI request, so it is not counted.
+            cached = server.has_cached_analysis(bank, question or None, pdf_text or None)
+            try:
+                with st.spinner("Asking the AI (this can take about a minute; repeated questions are faster)..."):
+                    st.session_state[f"ai_result_{bank}"] = server.analyze_bank(
+                        bank=bank,
+                        question=question or None,
+                        pdf_text=pdf_text or None,
+                        pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
+                    )
+            except DailyLimitReached:
+                st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+            else:
+                if not cached:
+                    st.session_state["ai_questions_used"] = used + 1
+                st.rerun()  # redraw so the captions show the new counts
         result = st.session_state.get(f"ai_result_{bank}")
         if result:
             render_assistant(result["assistant"], scored["scores"])
+            render_report(bank, result["assistant"])
             render_context(result)
