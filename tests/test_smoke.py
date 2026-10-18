@@ -72,3 +72,18 @@ def test_streamlit_shows_engine_deduction():
     text = "\n".join(m.value for m in at.markdown)
     assert "**Controversy - moderate (−2 points)**" in text
     assert "p. None" not in text
+
+
+def test_code_fingerprint_changes_with_code_or_data(tmp_path):
+    from server import code_fingerprint
+
+    code, data = tmp_path / "server.py", tmp_path / "ai_review.csv"
+    code.write_text("v1")
+    data.write_text("a,b")
+    first = code_fingerprint([code, data])
+    assert code_fingerprint([code, data]) == first  # stable
+    data.write_text("a,b,c")
+    second = code_fingerprint([code, data])
+    code.write_text("v2")
+    assert len({first, second, code_fingerprint([code, data])}) == 3
+    assert code_fingerprint() == code_fingerprint()  # real repo files

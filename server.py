@@ -25,6 +25,34 @@ T = TypeVar("T")
 # Analyses are cached per (bank, question, uploaded PDF); keep only the most recent ones.
 MAX_CACHE_ENTRIES = 64
 
+ROOT = Path(__file__).resolve().parent
+
+
+def code_fingerprint(paths: Optional[List[Path]] = None) -> str:
+    """Hash of the backend code and data files.
+
+    The Streamlit app keys its cached ``Server`` on this value, so a redeploy
+    that changes code, the evidence table or the AI review file builds a new
+    ``Server`` instead of reusing one created from the previous version.
+    """
+    if paths is None:
+        paths = (
+            [ROOT / "server.py"]
+            + sorted((ROOT / "tools").glob("*.py"))
+            + sorted((ROOT / "agents").glob("*.py"))
+            + sorted((ROOT / "data" / "evidence").glob("*"))
+        )
+    digest = hashlib.sha256()
+    for path in paths:
+        if path.is_file():
+            digest.update(str(path.relative_to(path.anchor)).encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()[:16]
+
+
+# Fingerprint of the files this module was imported from (see app_v2.py).
+LOADED_FINGERPRINT = code_fingerprint()
+
 
 class Server:
     """

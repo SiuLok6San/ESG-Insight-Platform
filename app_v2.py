@@ -1,3 +1,5 @@
+import importlib
+import sys
 from typing import Any, Dict, List
 
 import altair as alt
@@ -5,7 +7,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
 
-from server import Server
+from server import Server, code_fingerprint
 from tools.evidence import REPORTING_YEAR
 from tools.radar_chart import create_esg_radar_chart
 from tools.score_engine import PILLAR_NAMES
@@ -17,12 +19,30 @@ PILLAR_COLORS = {"E": "#2a78d6", "S": "#eb6834", "G": "#1baf7a"}
 FINAL_COLOR = "#2a78d6"
 
 
-@st.cache_resource
-def get_server() -> Server:
-    return Server()
+def backend_module(fingerprint: str):
+    """The ``server`` module matching the files on disk.
+
+    After a redeploy, Streamlit re-runs this page with the new code, but the
+    backend modules imported earlier (server, tools.*, agents.*) can still be
+    the old versions. If the files changed since they were imported, drop
+    those modules and import them again, so new page code never meets an old
+    Server class.
+    """
+    module = sys.modules.get("server")
+    if module is None or getattr(module, "LOADED_FINGERPRINT", None) != fingerprint:
+        for name in [m for m in list(sys.modules) if m == "server" or m.split(".")[0] in ("tools", "agents")]:
+            del sys.modules[name]
+        module = importlib.import_module("server")
+    return module
 
 
-server = get_server()
+@st.cache_resource(max_entries=1)
+def get_server(fingerprint: str) -> Server:
+    # Keyed on the code and data fingerprint: any change builds a fresh Server from fresh modules.
+    return backend_module(fingerprint).Server()
+
+
+server = get_server(code_fingerprint())
 server.refresh_llm_status()
 BANKS = server.banks()
 
