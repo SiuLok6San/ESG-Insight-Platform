@@ -37,7 +37,7 @@ st.sidebar.markdown(
 )
 st.sidebar.markdown(
     "**AI assistant:** "
-    + ("available. Advisory only; it never changes a score." if server.use_llm else "off (no local LLM running). Scores are unaffected.")
+    + ("available. Advisory only; it never changes a score." if server.use_llm else "off (no local LLM reachable). Scores are unaffected.")
 )
 
 
@@ -122,8 +122,9 @@ def render_assistant(assistant: Dict[str, Any]) -> None:
     st.markdown("### 🤖 AI assistant (advisory only)")
     if not assistant.get("enabled"):
         st.info(
-            "The AI assistant is off because no local LLM is running. It is optional and never changes the "
-            "scores. To enable it, install Ollama and run `ollama pull llama3`."
+            "The AI assistant is off because no local LLM (Ollama) is reachable from this app. It is optional "
+            "and never changes the scores. To try it, run the app on your own computer with Ollama installed "
+            "and `ollama pull llama3`."
         )
         return
     if assistant.get("error"):
