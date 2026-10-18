@@ -587,7 +587,7 @@ else:
                 from tools.pdf_fetcher import pdf_bytes_to_text
 
                 pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
-            with st.spinner("Asking the AI (usually 10-40 seconds)..."):
+            with st.spinner("Asking the AI (this can take 1-2 minutes; repeated questions are faster)..."):
                 st.session_state[f"ai_result_{bank}"] = server.analyze_bank(
                     bank=bank,
                     question=question or None,
