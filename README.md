@@ -17,7 +17,7 @@ An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every
 - **Yuqing's role** ([@yuqingtao1103](https://github.com/yuqingtao1103)):
   - Reviewed disclosures and built indicators: reviewed European banks' sustainability disclosures and translated EU disclosure requirements into validated ESG indicators for comparing the banks' reporting
   - Checked data quality: identified gaps and inconsistencies across the banks' ESG reports, improving the reliability and auditability of the reported data
-- **Revision (October 2026):** the scoring was rebuilt to be fully evidence-based. The original version fell back to randomly chosen rubric categories when the local LLM was unavailable and showed a simulated confidence band. Both are gone; see the [CHANGELOG](CHANGELOG.md).
+- **Revision (October 2026):** the course prototype used placeholder scores when no local LLM was available. The revision rebuilt the scoring to be fully evidence-based and replaced the prototype's placeholder confidence band with a sensitivity analysis; see the [CHANGELOG](CHANGELOG.md).
 
 ## Results
 

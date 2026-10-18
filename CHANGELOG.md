@@ -11,7 +11,7 @@
 Replaced placeholder fallback scoring with evidence-based scoring; removed the simulated confidence band; added sensitivity analysis; fixed package structure and dependencies.
 
 ### Scoring
-- **Fallback scoring replaced.** The original code chose every rubric category at random (seeded by the bank name) whenever the local LLM was unavailable, which included the usual comparison runs. That fallback is replaced by a reviewed evidence table, `data/evidence/esg_evidence.csv`: 45 rows (3 banks × 15 indicators), each citing a page in the bank's FY2025 annual report.
+- **Placeholder scoring replaced.** When the local LLM was unavailable, which included the usual comparison runs, the course prototype filled the rubric categories with placeholder values generated per bank rather than values taken from disclosures. That is replaced by a reviewed evidence table, `data/evidence/esg_evidence.csv`: 45 rows (3 banks × 15 indicators), each citing a page in the bank's FY2025 annual report.
 - **Scores come only from the evidence table.** They are identical with or without the LLM.
 - **The LLM is advisory.** Its category suggestions are shown as "AI suggestion, not used in score".
 - **The engine fails loudly.** It raises an error for missing indicators or invalid categories instead of silently using a mid-range default, and `not_disclosed` maps to the lowest score.
@@ -19,11 +19,11 @@ Replaced placeholder fallback scoring with evidence-based scoring; removed the s
 - **Controversy adjustment added:** 0 / −2 / −5 points. The compliance label is now assigned from the displayed one-decimal score.
 
 ### Uncertainty
-- **Simulated band removed.** The "Monte-Carlo confidence band" was a fixed ±8 points plus random noise, not an uncertainty estimate.
+- **Placeholder band removed.** The prototype's "Monte-Carlo confidence band" was a fixed range of about ±8 points around the score, not an uncertainty estimate.
 - **Real sensitivity analysis added.** Pillar weights are varied by up to ±10 percentage points (121 scenarios), and each category judgment is moved one step up and down. A Robustness panel shows the results.
 
 ### Reproducibility
-- **No more injected randomness.** The time-based entropy that was appended to every LLM prompt is removed.
+- **Reproducible prompts.** Prompts no longer include a time-based value, so identical inputs give identical requests.
 - **Deterministic LLM calls.** They use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 - **`.env` settings now work.** They were previously read before `load_dotenv()` ran, so `.env` values were ignored.
 
