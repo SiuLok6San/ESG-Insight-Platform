@@ -25,6 +25,10 @@ applied to every bank. Rows are proposed as `draft` and only become
   end of this file).
 - **Conservative rule:** when the evidence sits between two categories, the
   lower one is chosen and the alternative is recorded in `notes`.
+- **Verbatim quote:** every row quotes the report in the `quote` column. At
+  least one excerpt comes from the cited page; an excerpt from another page
+  of the same report starts with its page, e.g. `[p. 138] `. Excerpts are
+  separated by ` … ` and checked against the PDF by `scripts/verify_quotes.py`.
 
 ## Environmental (E) — 35% of the final score
 

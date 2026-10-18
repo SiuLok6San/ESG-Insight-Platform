@@ -16,21 +16,19 @@ from __future__ import annotations
 
 import csv
 import hashlib
-import re
-import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
 from typing import Callable, Dict, List, Mapping, Optional
 
 from tools.evidence import EvidenceRow, EvidenceTable
+from tools.quotes import verify_quote
 from tools.score_engine import ALL_KEYS, CONTROVERSY_KEY, NOT_DISCLOSED, RUBRIC_BY_KEY, allowed_categories
 
 ROOT = Path(__file__).resolve().parent.parent
 REVIEW_PATH = ROOT / "data" / "evidence" / "ai_review.csv"
 DEFINITIONS_PATH = ROOT / "data" / "evidence" / "category_definitions.md"
 VERDICTS = ("supports", "partially_supports", "does_not_support")
-MIN_QUOTE_CHARS = 20  # letters and digits; shorter quotes prove nothing
 
 SYSTEM_PROMPT = (
     "You are an independent auditor checking ESG evidence citations for a bank benchmark. "
@@ -96,17 +94,6 @@ class ReviewResult:
     model: str
     reviewed_on: str
     prompt_version: str
-
-
-def _normalise(text: str) -> str:
-    """Lowercase letters and digits only, so PDF spacing, hyphenation and punctuation do not matter."""
-    return re.sub(r"[^a-z0-9]", "", unicodedata.normalize("NFKC", text).lower())
-
-
-def verify_quote(quote: str, page_text: str) -> bool:
-    """True if ``quote`` (at least MIN_QUOTE_CHARS letters/digits) appears in ``page_text``."""
-    q = _normalise(quote)
-    return len(q) >= MIN_QUOTE_CHARS and q in _normalise(page_text)
 
 
 def load_definitions(path: Path = DEFINITIONS_PATH) -> Dict[str, str]:

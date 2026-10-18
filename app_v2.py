@@ -220,6 +220,10 @@ def render_breakdown(result: Dict[str, Any]) -> None:
                         f"- **{item['label']}** ({ai_check_text(review)}): {review['explanation']}  \n"
                         f"  Quote ({found}): \"{review['quote']}\""
                     )
+    with st.expander("Verbatim quotes from the report (each checked against the PDF page)"):
+        for item in breakdown + [{"label": "Controversy", "quotes": c["quotes"]}]:
+            quotes = " … ".join(f"\"{q['text']}\" ([p. {q['page']}]({q['page_url']}))" for q in item["quotes"])
+            st.markdown(f"- **{item['label']}**: {quotes}")
     if result["draft_indicators"]:
         st.warning(f"Unreviewed (draft) evidence rows: {', '.join(result['draft_indicators'])}")
     if any(item["not_disclosed"] for item in result["breakdown"]):

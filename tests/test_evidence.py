@@ -117,7 +117,7 @@ def test_page_must_be_a_positive_integer(tmp_path, page):
         load_evidence(tmp_path / "e.csv")
 
 
-@pytest.mark.parametrize("tail", ["ING Group,climate_plan\n", "ING Group,climate_plan,sbt_aligned,s,d,1,https://x,confirmed,n,EXTRA\n"])
+@pytest.mark.parametrize("tail", ["ING Group,climate_plan\n", "ING Group,climate_plan,sbt_aligned,s,q,d,1,https://x,confirmed,n,EXTRA\n"])
 def test_malformed_row_is_reported_not_crashing(tmp_path, tail):
     rows, _ = read_raw_rows()
     path = tmp_path / "e.csv"

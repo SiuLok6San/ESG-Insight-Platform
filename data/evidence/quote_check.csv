@@ -1,0 +1,89 @@
+bank,indicator,excerpt_no,page,fingerprint,verified,checked_on
+ING Group,climate_plan,1,111,fa5aba0a5385,True,2026-10-18
+ING Group,emission_disclosure,1,21,5b212cf52baa,True,2026-10-18
+ING Group,financed_emissions,1,126,48b7a4dd0e49,True,2026-10-18
+ING Group,financed_emissions,2,126,fa251739706e,True,2026-10-18
+ING Group,financed_emissions,3,125,2562a16d309e,True,2026-10-18
+ING Group,taxonomy_alignment,1,131,db80df3a480f,True,2026-10-18
+ING Group,risk_management,1,208,9d470595ae8a,True,2026-10-18
+ING Group,risk_management,2,208,29c2462a5971,True,2026-10-18
+ING Group,risk_management,3,208,daa6240ee2a4,True,2026-10-18
+ING Group,fossil_policy,1,114,bff926cabd2d,True,2026-10-18
+ING Group,fossil_policy,2,114,58a62fc96cfa,True,2026-10-18
+ING Group,diversity_inclusion,1,137,f212dfeb4aac,True,2026-10-18
+ING Group,diversity_inclusion,2,137,4ef448c89daa,True,2026-10-18
+ING Group,diversity_inclusion,3,138,35456adae945,True,2026-10-18
+ING Group,labor_rights,1,139,8559c3e603fb,True,2026-10-18
+ING Group,labor_rights,2,90,6729a33aff8c,True,2026-10-18
+ING Group,labor_rights,3,358,cec4fcb18ff8,True,2026-10-18
+ING Group,customer_protection,1,141,24308413b0e2,True,2026-10-18
+ING Group,customer_protection,2,311,97143c52ccd2,True,2026-10-18
+ING Group,aml_maturity,1,212,ef2ed575a1ab,True,2026-10-18
+ING Group,aml_maturity,2,212,9f5027e2abff,True,2026-10-18
+ING Group,board_independence,1,47,add5f82eeae6,True,2026-10-18
+ING Group,esg_oversight,1,102,4611be29d84b,True,2026-10-18
+ING Group,exec_comp_esg,1,70,e854c3697cab,True,2026-10-18
+ING Group,transparency_csrd,1,343,993307516d0f,True,2026-10-18
+ING Group,controversy,1,311,bee4d6eb8b4c,True,2026-10-18
+ING Group,controversy,2,309,b8b4786f7c89,True,2026-10-18
+ABN AMRO,climate_plan,1,220,68e5a22cd92e,True,2026-10-18
+ABN AMRO,climate_plan,2,220,4f3958a87fbc,True,2026-10-18
+ABN AMRO,emission_disclosure,1,287,a4a7cbf6e768,True,2026-10-18
+ABN AMRO,emission_disclosure,2,287,44e5685f2255,True,2026-10-18
+ABN AMRO,emission_disclosure,3,287,59b39f8df3bf,True,2026-10-18
+ABN AMRO,financed_emissions,1,243,ba5a5b9ea0d9,True,2026-10-18
+ABN AMRO,financed_emissions,2,243,54b0c691e5f9,True,2026-10-18
+ABN AMRO,taxonomy_alignment,1,271,273a27e6dded,True,2026-10-18
+ABN AMRO,risk_management,1,217,ad5e648710e2,True,2026-10-18
+ABN AMRO,risk_management,2,217,cf5455992130,True,2026-10-18
+ABN AMRO,risk_management,3,210,68d7359bd7b2,True,2026-10-18
+ABN AMRO,risk_management,4,214,7efe94cd250d,True,2026-10-18
+ABN AMRO,fossil_policy,1,226,da0cc1a83505,True,2026-10-18
+ABN AMRO,fossil_policy,2,226,70ae1a7ec766,True,2026-10-18
+ABN AMRO,fossil_policy,3,226,9424034be1fa,True,2026-10-18
+ABN AMRO,diversity_inclusion,1,257,d61a9e6727d2,True,2026-10-18
+ABN AMRO,diversity_inclusion,2,258,4fb8996d61ed,True,2026-10-18
+ABN AMRO,labor_rights,1,259,30a9a0579aec,True,2026-10-18
+ABN AMRO,labor_rights,2,261,18aac43df488,True,2026-10-18
+ABN AMRO,customer_protection,1,365,56937b668ff5,True,2026-10-18
+ABN AMRO,aml_maturity,1,379,3cbccd17225a,True,2026-10-18
+ABN AMRO,aml_maturity,2,379,20b5339c8263,True,2026-10-18
+ABN AMRO,board_independence,1,151,4fa2c6d93ab1,True,2026-10-18
+ABN AMRO,esg_oversight,1,165,bcdd8fb564f2,True,2026-10-18
+ABN AMRO,exec_comp_esg,1,178,c6ee2afb0afc,True,2026-10-18
+ABN AMRO,transparency_csrd,1,427,993307516d0f,True,2026-10-18
+ABN AMRO,controversy,1,320,257f50e25bf4,True,2026-10-18
+Rabobank,climate_plan,1,89,f4085eb18eaa,True,2026-10-18
+Rabobank,climate_plan,2,89,256f0f636156,True,2026-10-18
+Rabobank,climate_plan,3,105,b5273a69cce9,True,2026-10-18
+Rabobank,climate_plan,4,105,f60231f78310,True,2026-10-18
+Rabobank,climate_plan,5,105,b6cc42fd607e,True,2026-10-18
+Rabobank,emission_disclosure,1,96,e934ff3703bc,True,2026-10-18
+Rabobank,emission_disclosure,2,96,9d94260fc6c0,True,2026-10-18
+Rabobank,financed_emissions,1,97,18a2d6c2cd7b,True,2026-10-18
+Rabobank,financed_emissions,2,97,548978bedd69,True,2026-10-18
+Rabobank,financed_emissions,3,99,d0e8eaf78fe9,True,2026-10-18
+Rabobank,taxonomy_alignment,1,107,17b6dcd6fe0d,True,2026-10-18
+Rabobank,risk_management,1,90,64f9b93e4590,True,2026-10-18
+Rabobank,risk_management,2,90,2e29dc20c085,True,2026-10-18
+Rabobank,risk_management,3,95,4aeb4bce7e59,True,2026-10-18
+Rabobank,fossil_policy,1,94,cdb03e627cbf,True,2026-10-18
+Rabobank,fossil_policy,2,94,c3f844c061b5,True,2026-10-18
+Rabobank,fossil_policy,3,94,5884a2a9e1a9,True,2026-10-18
+Rabobank,diversity_inclusion,1,130,e158c04ef9fe,True,2026-10-18
+Rabobank,diversity_inclusion,2,130,103b3b3d89ea,True,2026-10-18
+Rabobank,diversity_inclusion,3,129,03d551585336,True,2026-10-18
+Rabobank,labor_rights,1,128,f2de13240a64,True,2026-10-18
+Rabobank,labor_rights,2,128,35012e7d9891,True,2026-10-18
+Rabobank,labor_rights,3,128,ca2f19deb584,True,2026-10-18
+Rabobank,labor_rights,4,124,8d9d73566fac,True,2026-10-18
+Rabobank,customer_protection,1,63,f4f259d0d279,True,2026-10-18
+Rabobank,aml_maturity,1,62,5836fe3c6cff,True,2026-10-18
+Rabobank,aml_maturity,2,62,e9252c25ad68,True,2026-10-18
+Rabobank,board_independence,1,172,7c0ddad57fa5,True,2026-10-18
+Rabobank,esg_oversight,1,175,6bab024c4241,True,2026-10-18
+Rabobank,esg_oversight,2,175,8c50cc066440,True,2026-10-18
+Rabobank,exec_comp_esg,1,158,bc183ec96a15,True,2026-10-18
+Rabobank,transparency_csrd,1,421,085a734406af,True,2026-10-18
+Rabobank,controversy,1,327,ccc5b4c44100,True,2026-10-18
+Rabobank,controversy,2,327,690940aef7a0,True,2026-10-18

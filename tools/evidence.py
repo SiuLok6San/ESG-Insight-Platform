@@ -1,8 +1,9 @@
 """Load and validate the evidence table (``data/evidence/esg_evidence.csv``).
 
 The evidence table is the single source of truth for scores: one row per
-bank x indicator, each with a category, a short evidence summary and a page
-citation in the bank's annual report. This module checks that the table is
+bank x indicator, each with a category, a short evidence summary, a page
+citation in the bank's annual report and a verbatim quote from that page
+(see ``tools/quotes.py``). This module checks that the table is
 complete and consistent with the rubric in ``tools/score_engine.py``.
 """
 
@@ -11,8 +12,9 @@ from __future__ import annotations
 import csv
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
+from tools.quotes import MIN_QUOTE_CHARS, normalise, parse_excerpts
 from tools.score_engine import ALL_KEYS, NOT_DISCLOSED, allowed_categories
 
 EVIDENCE_PATH = Path(__file__).resolve().parent.parent / "data" / "evidence" / "esg_evidence.csv"
@@ -22,6 +24,7 @@ COLUMNS = (
     "indicator",
     "category",
     "evidence_summary",
+    "quote",
     "source_document",
     "page",
     "url",
@@ -50,6 +53,11 @@ class EvidenceRow:
     url: str
     status: str
     notes: str
+    quote: str = ""
+
+    def excerpts(self) -> List[Tuple[Optional[int], str]]:
+        """Verbatim excerpts as (page, text); see ``tools.quotes.parse_excerpts``."""
+        return parse_excerpts(self.quote, self.page)
 
     @property
     def page_url(self) -> str:
@@ -151,6 +159,11 @@ def validate_rows(raw_rows: List[Dict[str, str]], fieldnames: List[str]) -> List
                 problems.append(f"{where}: page must be a positive integer, got {r['page']!r}")
             if not r["url"].startswith(("http://", "https://")):
                 problems.append(f"{where}: url must be an http(s) link")
+            if not r["quote"].strip():
+                problems.append(f"{where}: missing quote (a verbatim excerpt from the cited page)")
+            for _, text in parse_excerpts(r["quote"], None):
+                if len(normalise(text)) < MIN_QUOTE_CHARS:
+                    problems.append(f"{where}: quote excerpt too short to verify: {text!r}")
 
     for bank in banks:
         missing = [k for k in ALL_KEYS if (bank, k) not in seen]
@@ -176,6 +189,7 @@ def load_evidence(path: Path | str = EVIDENCE_PATH) -> EvidenceTable:
             indicator=r["indicator"],
             category=r["category"],
             evidence_summary=r["evidence_summary"],
+            quote=r["quote"],
             source_document=r["source_document"],
             page=_parse_page(r["page"]),
             url=r["url"],

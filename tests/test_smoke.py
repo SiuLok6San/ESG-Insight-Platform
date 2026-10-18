@@ -54,6 +54,8 @@ def test_streamlit_single_bank_page_renders():
     assert at.selectbox[0].value == BANKS[0]
     text = "\n".join(m.value for m in at.markdown)
     assert "Climate transition plan" in text and "#page=" in text
+    assert any(e.label.startswith("Verbatim quotes from the report") for e in at.expander)
+    assert '"For 2025, our GAR based on Turnover is 14 percent (2024: 7 percent)." ([p. 131]' in text
 
 
 def test_server_cache_is_bounded(offline_server, monkeypatch):

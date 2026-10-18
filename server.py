@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, TypeVar
 from agents.esg_agent import ESGAgent
 from agents.final_writer import FinalWriterAgent
 from agents.news_agent import NewsSummariser
-from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, load_evidence
+from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, EvidenceRow, load_evidence
 from tools.free_news import FreeNewsClient
 from tools.local_llm import LLMUnavailable, LocalLLM
 from tools.pdf_summarizer import PDFSummarizer
@@ -111,6 +111,7 @@ class Server:
                     "page_link": row.markdown_link(),
                     "status": row.status,
                     "notes": row.notes,
+                    "quotes": self._quotes(row),
                     "ai_review": self.reviews.get((bank, ind.key)),
                 }
             )
@@ -122,6 +123,7 @@ class Server:
             "breakdown": breakdown,
             "controversy_evidence": {
                 **rows[CONTROVERSY_KEY].to_dict(),
+                "quotes": self._quotes(rows[CONTROVERSY_KEY]),
                 "ai_review": self.reviews.get((bank, CONTROVERSY_KEY)),
             },
             "draft_indicators": [key for key, row in rows.items() if row.status != "confirmed"],
@@ -334,6 +336,14 @@ class Server:
             "changed": changed,
             "kept_from_evidence": [key for key in ALL_KEYS if key not in suggestions],
         }
+
+    @staticmethod
+    def _quotes(row: EvidenceRow) -> List[Dict[str, Any]]:
+        """Verbatim excerpts with links that open the PDF at their page."""
+        return [
+            {"page": page, "text": text, "page_url": f"{row.url}#page={page}" if row.url and page else ""}
+            for page, text in row.excerpts()
+        ]
 
     def _analysis_key(self, bank: str, question: Optional[str], pdf_text: Optional[str]) -> str:
         return f"{bank}:{self._hash(question)}:{self._hash(pdf_text)}"

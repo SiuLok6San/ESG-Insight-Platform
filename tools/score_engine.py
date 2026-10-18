@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Dict, List, Mapping, Tuple
+from typing import Dict, List, Mapping, Optional, Tuple
 
 NOT_DISCLOSED = "not_disclosed"
 PILLARS: Tuple[str, ...] = ("E", "S", "G")
@@ -158,7 +158,7 @@ class IndicatorScore:
     label: str
     weight: float
     category: str
-    score: int
+    score: float
     not_disclosed: bool
 
 
@@ -189,13 +189,27 @@ class ScoreEngine:
     def __init__(self, cfg: ScoreEngineConfig | None = None) -> None:
         self.cfg = cfg or ScoreEngineConfig()
 
-    def score(self, categories: Mapping[str, str], bank: str = "") -> BankScore:
+    def score(
+        self,
+        categories: Mapping[str, str],
+        bank: str = "",
+        score_overrides: Optional[Mapping[str, float]] = None,
+    ) -> BankScore:
         """Score one bank.
 
         ``categories`` must contain exactly one category for each rubric
         indicator plus ``controversy``. Missing, unknown or invalid entries
         raise ``ValueError``: nothing is filled in silently.
+
+        ``score_overrides`` (indicator key -> 0-100 score) replaces the
+        category score of those indicators. It is only used to analyse
+        alternative scoring rules (``scripts/scoring_options.py``); the
+        official scores never pass it.
         """
+        overrides = dict(score_overrides or {})
+        bad = {k: v for k, v in overrides.items() if k not in RUBRIC_BY_KEY or not 0 <= v <= 100}
+        if bad:
+            raise ValueError(f"{bank or 'bank'}: invalid score overrides {bad}")
         missing = [k for k in ALL_KEYS if k not in categories]
         unknown = [k for k in categories if k not in ALL_KEYS]
         if missing or unknown:
@@ -211,7 +225,7 @@ class ScoreEngine:
                     label=ind.label,
                     weight=ind.weight,
                     category=category,
-                    score=ind.score(category),
+                    score=overrides.get(ind.key, ind.score(category)),
                     not_disclosed=category == NOT_DISCLOSED,
                 )
             )
