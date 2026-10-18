@@ -59,7 +59,7 @@ def test_question_gets_an_answer_and_a_score_card(llm):
     assert "| Bank | Official score | AI reviewer score |\n" in page  # no scenario column without a what-if
     assert "Questions left in this session: 4 of 5" in captions(at)
     assert "AI requests left today for the whole site: 49 of 50" in captions(at)
-    assert llm.calls == ["route", "answer"]
+    assert llm.calls == ["answer"]  # an ordinary question is routed in code: one model call
 
 
 def test_example_button_asks_a_what_if_question(llm):
@@ -67,6 +67,7 @@ def test_example_button_asks_a_what_if_question(llm):
     next(b for b in at.button if "20% of executive pay" in b.label).click().run()
     assert not at.exception
     page = text(at)
+    assert llm.calls == ["route", "answer"]  # a what-if question still uses the LLM router
     assert "Scenario score" in page and "| ABN AMRO | **68.6** · Almost Meet |" in page
     assert "Scenario for ABN AMRO: ESG-linked executive pay `none` → `>=20`." in page
     assert any(e.label == "Evidence behind this answer (verbatim quotes)" for e in at.expander)
@@ -75,7 +76,7 @@ def test_example_button_asks_a_what_if_question(llm):
 def test_a_question_asked_before_is_answered_from_the_cache_and_not_counted(llm):
     ask(open_chat(), "Same question")
     second_visitor = ask(open_chat(), "Same question")
-    assert llm.calls == ["route", "answer"]  # the second visitor's answer came from the cache
+    assert llm.calls == ["answer"]  # the second visitor's answer came from the cache
     assert "Questions left in this session: 5 of 5" in captions(second_visitor)
     assert "AI requests left today for the whole site: 49 of 50" in captions(second_visitor)
 
@@ -113,10 +114,10 @@ def test_without_llm_the_chat_explains_and_compare_is_first():
 def test_busy_service_shows_a_message_and_does_not_count(llm, monkeypatch):
     from tools.local_llm import LLMBusy
 
-    def busy(self, system, user):
+    def busy(self, messages):
         raise LLMBusy("ollama-cloud is busy or not responding (HTTP 429)")
 
-    monkeypatch.setattr(LocalLLM, "ask_json", busy)
+    monkeypatch.setattr(LocalLLM, "stream", busy)
     at = ask(open_chat(), "Which bank is strongest?")
     assert any("The free AI service is busy right now" in w.value for w in at.warning)
     assert "Questions left in this session: 5 of 5" in captions(at)

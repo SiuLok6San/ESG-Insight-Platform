@@ -58,6 +58,9 @@ class LocalLLMConfig:
     chat_timeout: int = field(default_factory=lambda: _env_int("LLM_CHAT_TIMEOUT", 45))
     chat_retries: int = field(default_factory=lambda: _env_int("LLM_CHAT_RETRIES", 2))
     chat_max_retry_wait_s: float = 20.0
+    # Answers are about 200 words; a cap keeps each request short on a provider that serves one at a time.
+    chat_max_tokens: int = field(default_factory=lambda: _env_int("LLM_CHAT_MAX_TOKENS", 600))
+    router_max_tokens: int = 300
     cache_dir: Optional[Path] = CACHE_DIR
 
 
@@ -127,6 +130,7 @@ class LocalLLM:
             min_interval_s=0,
             base_url=base_url,
             max_retry_wait_s=self.config.chat_max_retry_wait_s if interactive else 120.0,
+            retry_on_read_timeout=not interactive,
         )
 
     def _require(self, interactive: bool = False) -> OpenAICompatibleClient:
@@ -153,7 +157,7 @@ class LocalLLM:
         """Return the model's reply as a JSON object (from cache when possible)."""
         client = self._require(interactive=True)
         try:
-            return client.chat_json(system, user)
+            return client.chat_json(system, user, max_tokens=self.config.router_max_tokens)
         except ProviderError as exc:
             raise self._unavailable(exc) from exc
 
@@ -161,6 +165,6 @@ class LocalLLM:
         """Yield the reply to ``messages`` in pieces (one piece when cached)."""
         client = self._require(interactive=True)
         try:
-            yield from client.chat_stream(messages, max_tokens=self.config.max_tokens)
+            yield from client.chat_stream(messages, max_tokens=self.config.chat_max_tokens)
         except ProviderError as exc:
             raise self._unavailable(exc) from exc

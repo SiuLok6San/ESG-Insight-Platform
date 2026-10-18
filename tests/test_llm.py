@@ -111,3 +111,18 @@ def test_chat_calls_fail_fast_and_report_busy(tmp_path, monkeypatch):
     with mock.patch.object(LocalLLM, "_client", return_value=fake):
         with pytest.raises(LLMBusy):
             llm.ask_json("system", "user")
+
+
+def test_chat_answers_and_routing_are_capped(tmp_path, monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key-not-real")
+    llm = LocalLLM(LocalLLMConfig(enabled=True, provider="auto", cache_dir=tmp_path))
+    assert (llm.config.chat_max_tokens, llm.config.router_max_tokens) == (600, 300)
+    assert llm._client(interactive=True).retry_on_read_timeout is False and llm._client().retry_on_read_timeout is True
+    fake = mock.Mock()
+    fake.chat_stream.return_value = iter(["a"])
+    fake.chat_json.return_value = {}
+    with mock.patch.object(LocalLLM, "_client", return_value=fake):
+        list(llm.stream([{"role": "user", "content": "q"}]))
+        llm.ask_json("s", "u")
+    assert fake.chat_stream.call_args.kwargs["max_tokens"] == 600
+    assert fake.chat_json.call_args.kwargs["max_tokens"] == 300

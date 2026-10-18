@@ -37,10 +37,10 @@ def test_unknown_intent_and_failed_routing_fall_back_to_bank_names(agent):
             raise RuntimeError("model down")
 
     agent.llm = Broken()
-    route = agent.route("And ING?", history=[("Tell me about ABN AMRO", "...")])
+    route = agent.route("What if ING exited coal by 2030?")
     assert route.banks == ["ING Group"] and route.rejected == ["routing failed: model down"]
     follow_up = agent.route("What about its controversy?", history=[("Tell me about ABN AMRO", "...")])
-    assert follow_up.banks == ["ABN AMRO"]  # taken from the previous question
+    assert follow_up.banks == ["ABN AMRO"] and follow_up.indicators == ["controversy"]  # bank from the previous question
 
 
 def test_scores_come_from_the_engine_not_the_model(agent):
@@ -124,3 +124,44 @@ def test_server_records_unknown_numbers_after_streaming():
     turn = server.chat_turn("How does ING score?")
     list(server.stream_answer(turn))
     assert turn.unknown_numbers == ["99.9"]
+
+
+@pytest.mark.parametrize(
+    "question, history, expected",
+    [
+        ("Which bank is strongest on governance?", (), False),
+        ("Why does ABN AMRO lose points on controversy?", (), False),
+        ("What would ABN AMRO score if it linked 20% of pay to ESG?", (), True),
+        ("Suppose Rabobank disclosed its board's independence.", (), True),
+        ("And for ING?", [("What if ABN AMRO exited coal?", "...")], True),  # short follow-up to a what-if
+        ("And for ING?", [("Tell me about ABN AMRO", "...")], False),
+    ],
+)
+def test_only_what_if_questions_use_the_llm_router(question, history, expected):
+    assert ChatAgent.needs_router(question, history) is expected
+
+
+@pytest.mark.parametrize(
+    "question, history, banks, indicators",
+    [
+        ("Which bank is strongest on governance?", (), [], ["board_independence", "esg_oversight", "exec_comp_esg", "transparency_csrd"]),
+        ("Why does ABN AMRO lose points on controversy?", (), ["ABN AMRO"], ["controversy"]),
+        ("And Rabobank?", [("Why does ABN AMRO lose points on controversy?", "...")], ["Rabobank"], ["controversy"]),
+        ("What is its gender pay gap?", [("Tell me about ING", "...")], ["ING Group"], ["diversity_inclusion"]),
+        ("How is executive pay linked to ESG at Rabo?", (), ["Rabobank"], ["exec_comp_esg"]),
+        ("Compare the banks' Green Asset Ratios", (), [], ["taxonomy_alignment"]),
+        ("Which bank is best overall?", [("Tell me about ING", "...")], [], []),  # no back-reference: all banks
+        ("And how does Rabobank do on that?", [("Which bank is strongest on governance?", "...")], ["Rabobank"],
+         ["board_independence", "esg_oversight", "exec_comp_esg", "transparency_csrd"]),
+    ],
+)
+def test_routing_in_code(agent, question, history, banks, indicators):
+    route = agent.route_in_code(question, history)
+    assert (route.banks, route.indicators) == (banks, indicators)
+
+
+def test_ordinary_question_makes_no_router_call(agent):
+    stub = StubLLM()
+    agent.llm = stub
+    route = agent.route("Why does ABN AMRO lose points on controversy?")
+    assert stub.calls == [] and route.banks == ["ABN AMRO"]

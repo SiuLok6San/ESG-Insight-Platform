@@ -2,6 +2,11 @@
 
 ## October 2026: after the revision
 
+- **Fewer AI requests per question.** On the live demo the free Ollama Cloud queue (one request at a time, five waiting) filled up, partly with requests the app had already given up on. Changes:
+  - Ordinary questions are now routed in code (bank names, topic keywords, follow-ups keep the previous bank or topic); only what-if questions use the LLM router. An ordinary question makes one model call instead of two.
+  - Chat answers are capped at 600 tokens and the router reply at 300.
+  - A chat call that timed out while waiting for a reply is not retried, since it may still be queued at the provider. Connection failures are still retried.
+  - In a live test, ordinary questions made one call each (about 10-15 s on a slow day) and a what-if question two. Answers and scores were correct, with no citation or number warnings.
 - **Interface reorganised** into four sections across the top of the page (Ask, Compare, Bank detail, Method & data) instead of a sidebar menu that is hidden on phones. Sections can be linked directly (`?section=method`).
 - **Method & data** gathers the methodology, a downloadable evidence table with the verbatim quotes, the quote-check result (88 of 88), and the blind AI review and AI evidence review results, with links to the re-check worksheet and the scoring-options analysis.
 - **Phone layout.** The score cards wrap two per row on narrow screens instead of stacking one per row. Their labels are shorter, so none is cut off; the controversy category moved to the label line.

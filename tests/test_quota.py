@@ -51,7 +51,7 @@ def test_a_question_uses_one_request_and_a_repeat_uses_none():
     assert not first.from_cache and server.ai_requests_left_today() == 0
     again, answer_again = ask(server, "  which bank is STRONGEST?")  # same question, different spacing and case
     assert again.from_cache and answer_again == answer
-    assert stub.calls == ["route", "answer"]
+    assert stub.calls == ["answer"]  # routed in code, answered once, then served from the cache
     with pytest.raises(DailyLimitReached):
         server.chat_turn("Another question")
 
@@ -105,5 +105,5 @@ def test_busy_router_stops_before_the_answer_call():
 
     server, stub = server_with_stub(BusyRouter(), daily_ai_limit=2)
     with pytest.raises(LLMBusy):
-        server.chat_turn("Which bank is strongest?")
+        server.chat_turn("What would ING score if it exited coal?")
     assert server.ai_requests_left_today() == 2 and stub.calls == []

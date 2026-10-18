@@ -158,3 +158,27 @@ def test_repeated_timeouts_end_as_busy(client):
         with pytest.raises(llm_provider.ProviderBusy, match="busy or not responding"):
             client.chat_json("s", "u")
     assert post.call_count == client.max_retries
+
+
+def test_read_timeout_is_not_retried_when_the_request_may_still_be_queued(tmp_path, monkeypatch):
+    import requests
+
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    monkeypatch.setattr(llm_provider.time, "sleep", lambda s: None)
+    chat = OpenAICompatibleClient("gemini", cache_dir=tmp_path, min_interval_s=0, retry_on_read_timeout=False)
+    with mock.patch("tools.llm_provider.requests.post", side_effect=requests.ReadTimeout("slow")) as post:
+        with pytest.raises(llm_provider.ProviderBusy):
+            chat.chat_json("s", "u")
+    assert post.call_count == 1
+    with mock.patch("tools.llm_provider.requests.post", side_effect=requests.ConnectTimeout("no route")) as post:
+        with pytest.raises(llm_provider.ProviderBusy):
+            chat.chat_json("s", "u")
+    assert post.call_count == chat.max_retries  # a connect timeout never reached the provider, so it is retried
+
+
+def test_max_tokens_is_sent_only_when_given(client):
+    with mock.patch("tools.llm_provider.requests.post", return_value=FakeResponse()) as post:
+        client.chat_json("s", "u")
+        assert "max_tokens" not in post.call_args.kwargs["json"]  # the offline review's cached requests are unchanged
+        client.chat_json("s", "u2", max_tokens=300)
+        assert post.call_args.kwargs["json"]["max_tokens"] == 300

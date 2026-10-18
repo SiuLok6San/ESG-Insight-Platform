@@ -2,10 +2,12 @@
 
 One turn has three steps:
 
-1. **Route** (one short LLM call, JSON): which banks and indicators the
-   question is about, and, for a "what if" question, which rubric categories
-   would change. Every value is checked against the rubric; anything else is
-   dropped and reported.
+1. **Route**: which banks and indicators the question is about. Ordinary
+   questions are routed in code (bank names and topic keywords). Only a
+   "what if" question costs one short LLM call (JSON), to map the
+   hypothetical to rubric category changes; every value is checked against
+   the rubric, and anything else is dropped and reported. Fewer calls matter
+   on a free tier that serves one request at a time.
 2. **Compute** (no LLM): official scores from the evidence table, the AI
    reviewer's score (a second opinion), and the scenario score, all from the same
    scoring engine. The model never produces a number.
@@ -28,6 +30,39 @@ from tools.score_engine import ALL_KEYS, NOT_DISCLOSED, RUBRIC_BY_KEY, BankScore
 
 INTENTS = ("explain", "compare", "what_if", "other")
 HISTORY_TURNS = 2  # earlier question/answer pairs passed to the model for follow-up questions
+
+# Wording that suggests a hypothetical ("what if", "would ... score", "suppose"); only these questions use the LLM router.
+WHAT_IF = re.compile(r"\b(if|would|suppose|supposing|imagine|hypothetical(?:ly)?|scenario|were to)\b", re.I)
+# Words that refer back to a bank named in the previous question.
+FOLLOW_UP = re.compile(r"\b(its|it|they|their|them|that bank|this bank|the bank|same)\b", re.I)
+# Words that refer back to the previous question's topic ("How does Rabobank do on that?").
+SAME_TOPIC = re.compile(r"\b(that|this|those|these|same)\b", re.I)
+PILLAR_KEYS = {
+    "E": ("climate_plan", "emission_disclosure", "financed_emissions", "taxonomy_alignment", "risk_management", "fossil_policy"),
+    "S": ("diversity_inclusion", "labor_rights", "customer_protection", "aml_maturity"),
+    "G": ("board_independence", "esg_oversight", "exec_comp_esg", "transparency_csrd"),
+}
+# Topic keywords -> indicators whose evidence (with all quotes) is given to the model.
+INDICATOR_KEYWORDS = (
+    (r"\bclimate\b|\benvironment(?:al)?\b|\bE pillar\b", PILLAR_KEYS["E"]),
+    (r"\bsocial\b|\bS pillar\b", PILLAR_KEYS["S"]),
+    (r"\bgovernance\b|\bG pillar\b", PILLAR_KEYS["G"]),
+    (r"transition plan|\bsbti\b|net[ -]zero|decarboni[sz]", ("climate_plan",)),
+    (r"\bemission|\bscope [123]|\bghg\b|carbon footprint", ("emission_disclosure", "financed_emissions")),
+    (r"\bfinanced emissions|\bpcaf\b", ("financed_emissions",)),
+    (r"\btaxonomy\b|green asset|\bgar\b", ("taxonomy_alignment",)),
+    (r"risk management|climate risk|stress test|risk appetite", ("risk_management",)),
+    (r"\bfossil|\bcoal\b|\boil\b|\bgas\b", ("fossil_policy",)),
+    (r"\bdiversity\b|\bgender\b|pay gap|\bwomen\b|\binclusion\b", ("diversity_inclusion",)),
+    (r"\blabou?r\b|works council|collective|human rights|\bworkforce\b|\bemployees?\b", ("labor_rights",)),
+    (r"\bcustomers?\b|\bconsumers?\b|complaints?|duty of care|\bclients?\b", ("customer_protection",)),
+    (r"\baml\b|money laundering|financial crime|\bkyc\b", ("aml_maturity",)),
+    (r"\bboard\b|independen", ("board_independence",)),
+    (r"oversight|sustainability committee|esg committee", ("esg_oversight",)),
+    (r"executive pay|\bremuneration\b|\bbonus|variable pay|\bexecutives?\b|\bceo\b", ("exec_comp_esg",)),
+    (r"\bcsrd\b|\besrs\b|assurance|transparen", ("transparency_csrd",)),
+    (r"controvers|lawsuit|litigation|\bfines?\b|prosecut|legal|court|scandal", ("controversy",)),
+)
 
 ROUTER_SYSTEM = (
     "You map a user's question about the ESG benchmark of three Dutch banks to JSON. "
@@ -89,14 +124,49 @@ class ChatAgent:
         self.reviewer_note = "AI reviewer: categories chosen by an AI review of the cited pages."
 
     # Step 1: route
+    @staticmethod
+    def needs_router(question: str, history: Sequence[Tuple[str, str]] = ()) -> bool:
+        """True for a "what if" question, or a short follow-up to one; only these use the LLM router."""
+        if WHAT_IF.search(question):
+            return True
+        previous = list(history)[-1][0] if history else ""
+        return bool(previous) and bool(WHAT_IF.search(previous)) and len(question.split()) <= 8
+
+    def route_in_code(self, question: str, history: Sequence[Tuple[str, str]] = ()) -> Route:
+        """Route an ordinary question without the LLM: bank names and topic keywords.
+
+        No bank named means all banks, unless the question refers back ("its",
+        "they") to the bank of the previous question. A short follow-up with no
+        topic of its own ("And Rabobank?", "How does Rabobank do on that?") keeps
+        the previous question's topic.
+        """
+        previous = list(history)[-1][0] if history else ""
+        banks = self._banks_named_in(question, ())
+        if not banks and previous and FOLLOW_UP.search(question):
+            banks = self._banks_named_in(previous, ())
+        indicators = self.indicators_named_in(question)
+        if not indicators and previous and (len(question.split()) <= 6 or SAME_TOPIC.search(question)):
+            indicators = self.indicators_named_in(previous)
+        return Route(banks=banks, indicators=indicators, intent="explain" if len(banks) == 1 else "compare")
+
+    @staticmethod
+    def indicators_named_in(text: str) -> List[str]:
+        found: List[str] = []
+        for pattern, keys in INDICATOR_KEYWORDS:
+            if re.search(pattern, text, re.I):
+                found += [k for k in keys if k not in found]
+        return [k for k in ALL_KEYS if k in found]  # rubric order
+
     def route(self, question: str, history: Sequence[Tuple[str, str]] = ()) -> Route:
-        """Ask the LLM what the question is about; fall back to bank names in the text if that fails."""
+        """Route in code, or for a what-if question ask the LLM; fall back to code if the LLM's reply is unusable."""
+        if not self.needs_router(question, history):
+            return self.route_in_code(question, history)
         try:
             raw = self.llm.ask_json(ROUTER_SYSTEM, self._router_prompt(question, history))
         except LLMBusy:
             raise  # the answer call would hit the same busy service; stop now
         except Exception as exc:  # routing is best effort; the answer step still works
-            route = Route(banks=self._banks_named_in(question, history), indicators=[], intent="other")
+            route = self.route_in_code(question, history)
             route.rejected.append(f"routing failed: {exc}")
             return route
         return self.validate_route(raw, question, history)
@@ -172,7 +242,7 @@ class ChatAgent:
             found = []
             for bank in self.evidence.banks():
                 first = bank.split()[0].lower()
-                if first in words or bank.lower() in text.lower():
+                if first in words or bank.lower() in text.lower() or (first == "rabobank" and "rabo" in words):
                     found.append(bank)
             if found:
                 return found

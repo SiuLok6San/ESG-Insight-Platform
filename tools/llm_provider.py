@@ -74,6 +74,7 @@ class OpenAICompatibleClient:
         min_interval_s: float = 4.5,
         base_url: Optional[str] = None,
         max_retry_wait_s: float = 120.0,
+        retry_on_read_timeout: bool = True,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"Unknown provider {provider!r}; choose from {sorted(PROVIDERS)}")
@@ -88,6 +89,9 @@ class OpenAICompatibleClient:
         self.max_retries = max_retries
         self.min_interval_s = min_interval_s  # spacing between uncached calls (free-tier rate limits)
         self.max_retry_wait_s = max_retry_wait_s  # give up instead of waiting longer than this before a retry
+        # A read timeout means the request reached the provider and may still be queued there; a retry would add a
+        # second copy to the queue. The chat sets this to False; offline batch jobs can afford to retry.
+        self.retry_on_read_timeout = retry_on_read_timeout
         self._last_call = 0.0
 
     def _api_key(self) -> Optional[str]:
@@ -100,14 +104,16 @@ class OpenAICompatibleClient:
             )
         return key
 
-    def chat_json(self, system: str, user: str) -> Dict[str, object]:
+    def chat_json(self, system: str, user: str, max_tokens: Optional[int] = None) -> Dict[str, object]:
         """Send one chat request and return the parsed JSON object from the reply."""
-        payload = {
+        payload: Dict[str, object] = {
             "model": self.model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
+        if max_tokens is not None:  # only when given, so existing cache keys stay valid
+            payload["max_tokens"] = max_tokens
         cache_key = self._cache_key(payload)
         cached = self._read_cache(cache_key)
         if cached is not None:
@@ -179,7 +185,7 @@ class OpenAICompatibleClient:
                     parts.append(delta)
                     yield delta
         except requests.RequestException as exc:
-            raise ProviderError(f"{self.config.name} stream interrupted: {type(exc).__name__}") from exc
+            raise ProviderBusy(f"{self.config.name} stream interrupted: {type(exc).__name__}") from exc
         finally:
             resp.close()
         text = "".join(parts).strip()
@@ -205,6 +211,8 @@ class OpenAICompatibleClient:
                 )
             except requests.RequestException as exc:
                 last_error = f"network error: {type(exc).__name__}"
+                if isinstance(exc, requests.ReadTimeout) and not self.retry_on_read_timeout:
+                    raise ProviderBusy(f"{self.config.name} is busy or not responding ({last_error})") from exc
                 self._wait_before_retry(attempt, last_error, 2**attempt)
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
@@ -252,6 +260,8 @@ class OpenAICompatibleClient:
                 )
             except requests.RequestException as exc:
                 last_error = f"network error: {type(exc).__name__}"
+                if isinstance(exc, requests.ReadTimeout) and not self.retry_on_read_timeout:
+                    raise ProviderBusy(f"{self.config.name} is busy or not responding ({last_error})") from exc
                 self._wait_before_retry(attempt, last_error, 2**attempt)
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:

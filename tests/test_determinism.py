@@ -21,7 +21,7 @@ def test_scores_identical_with_and_without_llm(offline_server):
         list(server.stream_answer(server.chat_turn(question)))
     server.write_report("ING Group")
     assert {bank: server.score_bank(bank) for bank in BANKS} == without_llm
-    assert stub.calls == ["route", "answer", "route", "answer", "report"]
+    assert stub.calls == ["answer", "route", "answer", "report"]  # only the what-if question is routed by the LLM
 
 
 def test_no_randomness_in_scoring_path():
