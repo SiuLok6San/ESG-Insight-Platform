@@ -4,7 +4,7 @@
 
 An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
-**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). On the Single bank page you can ask the AI assistant a question about a bank (5 questions per visit, and 50 AI requests per day for the whole site). If the app has been idle, it may take about 30 seconds to wake up.
+**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). The first page is a chat: ask about the three banks' ESG scores, including what-if questions (5 questions per visit, and 50 AI requests per day for the whole site). If the app has been idle, it may take about 30 seconds to wake up.
 
 ## Context
 
@@ -96,11 +96,19 @@ Events already scored as `fined` under AML maturity or customer protection are n
 
 A tie between banks counts as a ranking change.
 
-**7. Optional AI assistant.** On the Single bank page, a user can ask a question about a bank. An LLM (Ollama Cloud `gemma4:31b` online, or a local Ollama server) answers from the reviewed evidence table, recent news and market data, and an optional uploaded PDF, citing report pages. It also suggests categories for the indicators.
-- It never changes the official score. The categories it suggests are scored with the same engine and shown separately as "AI estimate (not official)", with a list of the indicators where it disagrees with the evidence. Indicators it does not classify keep the evidence category.
-- A narrative report is written only when the user clicks **Write an AI narrative report**, so a question needs two model calls (news summary and answer) instead of three. In one timed run on 18 October 2026, a new question took about 55 seconds and a report about 41 seconds.
-- To stay within the free API quota, the online demo allows 5 questions per visit and 50 AI requests per day for the whole site (questions and reports together). The per-visit limit resets when the page is reloaded; the daily limit does not, and resets at midnight UTC or when the app restarts. Answers served from the cache do not count.
-- Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
+**7. Optional AI assistant (chat).** The first page of the app is a chat about the three banks. It answers questions such as "Which bank is strongest on climate?" and what-if questions such as "What would ABN AMRO score if it linked 20% of executive pay to ESG targets?" (code in [`agents/chat_agent.py`](agents/chat_agent.py)). Each question goes through three steps:
+1. **Understand the question** (one short LLM call): which banks and indicators it is about, and for a what-if question, which rubric categories would change. Every value is checked against the rubric; anything else is dropped and reported.
+2. **Compute the scores** (no LLM):
+   - the official score;
+   - the **AI reviewer score**: the same engine applied to the categories the offline AI evidence review chose (section 8), an independent reading of the cited pages;
+   - for what-if questions, a **scenario score** and any change in the ranking.
+3. **Answer** (one streamed LLM call): the model may use only the evidence rows, verbatim quotes and computed scores, and must cite pages. Page citations that are not in the evidence it was given are flagged under the answer.
+
+Each answer comes with a score card and the verbatim quotes it could use. The model never produces a number, and only the official score is used in the benchmark.
+- The model is Ollama Cloud `gemma4:31b` online, or a local Ollama server. Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
+- In a live test on 18 October 2026, the first words of an answer appeared after about 3 seconds and the full answer after about 4 seconds.
+- To stay within the free API quota, the online demo allows 5 questions per visit and 50 AI requests per day for the whole site (questions and narrative reports together). The per-visit limit resets when the page is reloaded; the daily limit does not, and resets at midnight UTC or when the app restarts. Answers served from the cache do not count.
+- A narrative report for one bank can be written on request from the Single bank page.
 
 **8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
 - For each row, an LLM reads only the cited PDF page and answers three things: does the page support the evidence summary; which category it would assign from the written definitions; which passage backs its answer.
@@ -150,7 +158,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example). On Streamlit Community Cloud, add `OLLAMA_API_KEY` under the app's **Settings → Secrets** instead of a `.env` file.
 
-To run the tests (118 tests, no LLM or network needed):
+To run the tests (126 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -187,18 +195,17 @@ python -m scripts.scoring_options --write
   - The sensitivity analysis shows which judgments matter, but a different analyst could reasonably differ on borderline rows. These are recorded in the `notes` column.
 - **Self-reported disclosures.** The evidence is what the banks report. The sustainability statements carry limited, not reasonable, assurance.
 - **Limited differentiation.** 8 of the 15 indicators have the same category for all three banks, so the ranking rests on a few indicators. Compliance labels near the 75 threshold are sensitive to weights and single judgments.
-- **AI assistant.** Its answers and AI estimate come from a language model and can be wrong. They may also draw on news that is not part of the reviewed evidence. They are advisory and never used for scoring.
+- **AI assistant.** Its answers come from a language model and can be wrong or incomplete, even though the scores are computed by code and citations outside the evidence are flagged. The AI reviewer score reflects one model reading one page per row. Both are advisory and never used for the official scores.
 - **Not investment advice.** This is a course project benchmark, not an investment or credit recommendation.
 
 ## Project structure
 
 ```text
 ├── app_v2.py                    # Streamlit UI
-├── server.py                    # Orchestrator: scores, optional context, optional AI assistant
+├── server.py                    # Orchestrator: scores, sensitivity, optional AI assistant
 ├── agents/
-│   ├── esg_agent.py             # LLM category suggestions (advisory only)
-│   ├── final_writer.py          # LLM narrative report (advisory only)
-│   └── news_agent.py            # LLM news summary (advisory only)
+│   ├── chat_agent.py            # Chat: route the question, compute scores, stream a cited answer
+│   └── final_writer.py          # LLM narrative report on request (advisory only)
 ├── tools/
 │   ├── score_engine.py          # Rubric, pillar scores, controversy, compliance label
 │   ├── evidence.py              # Loads and validates the evidence table
@@ -207,11 +214,8 @@ python -m scripts.scoring_options --write
 │   ├── llm_provider.py          # OpenAI-compatible client (Ollama Cloud, Gemini, Groq, local Ollama)
 │   ├── local_llm.py             # AI assistant client (Ollama Cloud or local Ollama; temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
-│   ├── pdf_summarizer.py        # LLM report summary (advisory only)
 │   ├── quota.py                 # Site-wide daily cap on AI requests
 │   ├── quotes.py                # Verbatim quotes: parsing and checking against PDF pages
-│   ├── free_news.py             # Google News RSS (context only)
-│   ├── yahoo_client.py          # Yahoo Finance snapshot (context only)
 │   ├── dutch_banks.py           # Bank names and aliases
 │   └── radar_chart.py           # Radar chart
 ├── data/evidence/

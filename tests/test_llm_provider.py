@@ -92,3 +92,49 @@ def test_ollama_cloud_is_the_default_provider(tmp_path, monkeypatch):
     assert post.call_args.args[0] == "https://ollama.com/v1/chat/completions"
     assert post.call_args.kwargs["json"]["model"] == "gemma4:31b"
     assert post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {FAKE_KEY}"
+
+
+class FakeStream:
+    def __init__(self, lines, status=200):
+        self.status_code = status
+        self.headers = {}
+        self.text = ""
+        self._lines = lines
+        self.closed = False
+
+    encoding = None  # like requests: no charset in the Content-Type header
+
+    def iter_lines(self, decode_unicode=True):
+        for line in self._lines:  # decoded like requests does, with the response encoding
+            yield line.encode("utf-8").decode(self.encoding or "latin-1")
+
+    def close(self):
+        self.closed = True
+
+
+def sse(*pieces):
+    return [f'data: {json.dumps({"choices": [{"delta": {"content": p}}]})}' for p in pieces] + ["", "data: [DONE]"]
+
+
+def test_stream_yields_pieces_then_serves_the_whole_reply_from_cache(client):
+    stream = FakeStream(sse("Green ", "Asset ", "Ratio"))
+    messages = [{"role": "user", "content": "q"}]
+    with mock.patch("tools.llm_provider.requests.post", return_value=stream) as post:
+        assert list(client.chat_stream(messages)) == ["Green ", "Asset ", "Ratio"]
+        assert list(client.chat_stream(messages)) == ["Green Asset Ratio"]  # cached, one piece
+    assert post.call_count == 1 and stream.closed
+    sent = post.call_args.kwargs["json"]
+    assert sent["stream"] is True and sent["temperature"] == 0 and post.call_args.kwargs["stream"] is True
+
+
+def test_stream_retries_before_the_first_byte_and_never_caches_a_failed_reply(client):
+    responses = [FakeStream([], status=503), FakeStream(["data: not json"])]
+    with mock.patch("tools.llm_provider.requests.post", side_effect=responses):
+        with pytest.raises(ProviderError, match="Unexpected stream data"):
+            list(client.chat_stream([{"role": "user", "content": "q"}]))
+    assert not any(client.cache_dir.iterdir())
+
+
+def test_stream_is_decoded_as_utf8(client):
+    with mock.patch("tools.llm_provider.requests.post", return_value=FakeStream(sse("1.5°C-aligned"))):
+        assert "".join(client.chat_stream([{"role": "user", "content": "q"}])) == "1.5°C-aligned"

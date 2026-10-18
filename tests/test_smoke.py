@@ -4,7 +4,7 @@ from pathlib import Path
 
 from streamlit.testing.v1 import AppTest
 
-from tests.helpers import BANKS
+from tests.helpers import BANKS, server_with_stub
 from tools.score_engine import RUBRIC
 
 APP = str(Path(__file__).resolve().parent.parent / "app_v2.py")
@@ -13,9 +13,7 @@ APP = str(Path(__file__).resolve().parent.parent / "app_v2.py")
 def test_backend_runs_end_to_end_without_llm(offline_server):
     assert offline_server.banks() == BANKS
     for bank in BANKS:
-        result = offline_server.analyze_bank(bank)
-        assert result["ok"] and result["bank"] == bank
-        assert result["assistant"] == {"enabled": False}
+        result = offline_server.score_bank(bank)
         assert len(result["breakdown"]) == len(RUBRIC)
         for item in result["breakdown"]:
             assert item["page_url"].startswith("https://") and f"#page={item['page']}" in item["page_url"]
@@ -58,14 +56,15 @@ def test_streamlit_single_bank_page_renders():
     assert '"For 2025, our GAR based on Turnover is 14 percent (2024: 7 percent)." ([p. 131]' in text
 
 
-def test_server_cache_is_bounded(offline_server, monkeypatch):
+def test_server_cache_is_bounded(monkeypatch):
     import server as server_module
 
     monkeypatch.setattr(server_module, "MAX_CACHE_ENTRIES", 3)
+    server, _ = server_with_stub()
     for i in range(5):
-        offline_server.analyze_bank("ING Group", question=f"question {i}")
-    assert len(offline_server.cache) == 3
-    assert offline_server.analyze_bank("ING Group", question="question 4")["ok"]
+        list(server.stream_answer(server.chat_turn(f"question {i}")))
+    assert len(server.cache) == 3
+    assert server.chat_turn("question 4").from_cache
 
 
 def test_streamlit_shows_engine_deduction():

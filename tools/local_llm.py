@@ -22,7 +22,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Iterator, List, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -119,11 +119,34 @@ class LocalLLM:
             base_url=base_url,
         )
 
-    def ask(self, prompt: str) -> str:
-        """Return the model's reply to ``prompt`` (from cache when possible)."""
+    def _require(self) -> OpenAICompatibleClient:
         if not self.is_available():
             raise LLMUnavailable(f"LLM {self.describe()} is disabled or not reachable")
         try:
-            return self._client().chat_text(prompt, max_tokens=self.config.max_tokens)
-        except (ProviderError, ValueError) as exc:
+            return self._client()
+        except ValueError as exc:  # e.g. a provider without a default model
+            raise LLMUnavailable(str(exc)) from exc
+
+    def ask(self, prompt: str) -> str:
+        """Return the model's reply to ``prompt`` (from cache when possible)."""
+        client = self._require()
+        try:
+            return client.chat_text(prompt, max_tokens=self.config.max_tokens)
+        except ProviderError as exc:
+            raise LLMUnavailable(str(exc)) from exc
+
+    def ask_json(self, system: str, user: str) -> Dict[str, object]:
+        """Return the model's reply as a JSON object (from cache when possible)."""
+        client = self._require()
+        try:
+            return client.chat_json(system, user)
+        except ProviderError as exc:
+            raise LLMUnavailable(str(exc)) from exc
+
+    def stream(self, messages: List[Dict[str, str]]) -> Iterator[str]:
+        """Yield the reply to ``messages`` in pieces (one piece when cached)."""
+        client = self._require()
+        try:
+            yield from client.chat_stream(messages, max_tokens=self.config.max_tokens)
+        except ProviderError as exc:
             raise LLMUnavailable(str(exc)) from exc

@@ -1,7 +1,8 @@
 """Minimal client for OpenAI-compatible chat APIs (Ollama Cloud, Gemini, Groq, local Ollama).
 
 Used by the offline AI evidence review (``scripts/review_evidence.py``, via
-``chat_json``) and the AI assistant (``tools/local_llm.py``, via ``chat_text``).
+``chat_json``) and the AI assistant (``tools/local_llm.py``, via ``chat_json``,
+``chat_text`` and the streaming ``chat_stream``).
 Requests use temperature 0; every response is cached on disk under a hash of
 the full request, so a re-run reproduces the same output without calling the
 API again. The API key is read from an
@@ -16,7 +17,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Iterator, List, Optional
 
 import requests
 
@@ -131,6 +132,82 @@ class OpenAICompatibleClient:
             raise ProviderError(f"{self.config.name} returned an empty reply")
         self._write_cache(cache_key, {"text": text})
         return text
+
+    def chat_stream(self, messages: List[Dict[str, str]], max_tokens: int = 1024) -> Iterator[str]:
+        """Yield the reply in pieces as the model writes it.
+
+        A cached reply is yielded in one piece. A reply is cached only after it
+        has been received completely.
+        """
+        payload: Dict[str, object] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+        }
+        if self.config.name.startswith("ollama"):
+            payload["seed"] = 42
+        cache_key = self._cache_key(payload)
+        cached = self._read_cache(cache_key)
+        if cached is not None:
+            yield str(cached["text"])
+            return
+        parts: List[str] = []
+        resp = self._open_stream({**payload, "stream": True})
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line or not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    delta = json.loads(data)["choices"][0].get("delta", {}).get("content") or ""
+                except (KeyError, IndexError, TypeError, ValueError) as exc:
+                    raise ProviderError(f"Unexpected stream data from {self.config.name}: {exc}") from exc
+                if delta:
+                    parts.append(delta)
+                    yield delta
+        except requests.RequestException as exc:
+            raise ProviderError(f"{self.config.name} stream interrupted: {type(exc).__name__}") from exc
+        finally:
+            resp.close()
+        text = "".join(parts).strip()
+        if not text:
+            raise ProviderError(f"{self.config.name} returned an empty reply")
+        self._write_cache(cache_key, {"text": text})
+
+    def _open_stream(self, payload: Dict[str, object]) -> requests.Response:
+        """Start a streaming request, retrying like ``_post`` until the first byte arrives."""
+        headers = {"Content-Type": "application/json"}
+        key = self._api_key()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        last_error = ""
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                resp = requests.post(
+                    self.config.base_url + "chat/completions",
+                    json=payload,
+                    headers=headers,
+                    timeout=self.timeout,
+                    stream=True,
+                )
+            except requests.RequestException as exc:
+                last_error = f"network error: {type(exc).__name__}"
+                time.sleep(2**attempt)
+                continue
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_error = f"HTTP {resp.status_code}"
+                resp.close()
+                time.sleep(2**attempt)
+                continue
+            if resp.status_code != 200:
+                raise ProviderError(f"HTTP {resp.status_code} from {self.config.name}: {resp.text[:300]}")
+            # Event streams often omit the charset; requests would then decode UTF-8 as Latin-1 ("Â°C").
+            resp.encoding = "utf-8"
+            return resp
+        raise ProviderError(f"{self.config.name} failed after {self.max_retries} attempts ({last_error})")
 
     def _cache_key(self, payload: Dict[str, object]) -> str:
         return hashlib.sha256(json.dumps({"base_url": self.config.base_url, **payload}, sort_keys=True).encode()).hexdigest()

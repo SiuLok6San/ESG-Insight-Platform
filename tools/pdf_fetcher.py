@@ -76,17 +76,3 @@ def extract_pages(data: bytes, pages: Sequence[int]) -> Dict[int, str]:
     except Exception as exc:
         logger.warning("[PDFFetcher] Failed to parse PDF: %s", exc)
         return {}
-
-
-def pdf_bytes_to_text(data: bytes, pages: Optional[Sequence[int]] = None) -> str:
-    """Text of the PDF, or only of ``pages`` (1-based, each prefixed with its page number)."""
-    if pages is not None:
-        return "\n\n".join(f"--- page {n} ---\n{text}" for n, text in extract_pages(data, pages).items())
-    if PdfReader is None:
-        logger.warning("[PDFFetcher] pypdf not installed; cannot parse PDF.")
-        return ""
-    try:
-        return "\n".join(page.extract_text() or "" for page in PdfReader(BytesIO(data)).pages)
-    except Exception as exc:
-        logger.warning("[PDFFetcher] Failed to parse PDF: %s", exc)
-        return ""

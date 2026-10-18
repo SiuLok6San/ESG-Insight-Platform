@@ -24,4 +24,4 @@ def evidence() -> EvidenceTable:
 @pytest.fixture
 def offline_server() -> Server:
     """Backend with the LLM disabled and no network access."""
-    return Server(use_llm=False, fetch_external=False)
+    return Server(use_llm=False)

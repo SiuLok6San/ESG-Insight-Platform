@@ -121,8 +121,8 @@ def test_server_attaches_reviews_without_changing_scores(tmp_path):
     path = tmp_path / "ai_review.csv"
     write_reviews(run_review(table, StubClient(GOOD), lambda row: PAGE, "stub"), path)
 
-    plain = Server(use_llm=False, fetch_external=False, review_path=tmp_path / "none.csv")
-    reviewed = Server(use_llm=False, fetch_external=False, review_path=path)
+    plain = Server(use_llm=False, review_path=tmp_path / "none.csv")
+    reviewed = Server(use_llm=False, review_path=path)
     a, b = plain.score_bank("ING Group"), reviewed.score_bank("ING Group")
     assert a["scores"] == b["scores"]
     assert b["breakdown"][0]["ai_review"]["ai_verdict"] == "supports"

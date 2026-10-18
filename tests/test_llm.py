@@ -2,8 +2,6 @@ from unittest import mock
 
 import pytest
 
-from agents.esg_agent import ESGAgent
-from tests.helpers import StubLLM
 from tools.local_llm import LLMUnavailable, LocalLLM, LocalLLMConfig
 
 
@@ -65,25 +63,21 @@ def test_env_settings_are_read_after_dotenv(monkeypatch):
     assert (config.timeout, config.local_model, config.cloud_model) == (7, "test-model", "gpt-oss:20b")
 
 
-def test_esg_agent_returns_only_valid_suggestions():
-    result = ESGAgent(StubLLM()).run(bank="ING Group", question=None, context_blob="context")
-    assert result["suggestions"] == {"climate_plan": "weak", "fossil_policy": "exit"}
-    assert result["rejected"] == {"aml_maturity": "excellent", "made_up_key": "x"}
-    assert result["analysis_text"] == "Narrative analysis."
+def test_ask_json_and_stream_go_through_the_same_client(tmp_path, monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key-not-real")
+    llm = LocalLLM(LocalLLMConfig(enabled=True, provider="auto", cache_dir=tmp_path))
+    fake = mock.Mock()
+    fake.chat_json.return_value = {"intent": "explain"}
+    fake.chat_stream.return_value = iter(["a", "b"])
+    with mock.patch.object(LocalLLM, "_client", return_value=fake):
+        assert llm.ask_json("system", "user") == {"intent": "explain"}
+        assert list(llm.stream([{"role": "user", "content": "q"}])) == ["a", "b"]
 
 
-@pytest.mark.parametrize(
-    "raw, expected",
-    [
-        ('text {"climate_plan": "weak"}', {"climate_plan": "weak"}),
-        ('text {"a": {"b": 1}} end', {"a": {"b": 1}}),
-        ("no json here", {}),
-        ('broken {"climate_plan": ', {}),
-    ],
-)
-def test_json_extraction(raw, expected):
-    _, parsed = ESGAgent._split_analysis_and_json(raw)
-    assert parsed == expected
+def test_stream_raises_llm_unavailable_when_disabled(tmp_path):
+    llm = LocalLLM(LocalLLMConfig(enabled=False, cache_dir=tmp_path))
+    with pytest.raises(LLMUnavailable):
+        list(llm.stream([{"role": "user", "content": "q"}]))
 
 
 def test_failed_availability_probe_is_rechecked(monkeypatch, tmp_path):

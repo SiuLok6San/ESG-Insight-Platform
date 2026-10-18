@@ -42,19 +42,44 @@ def make_table(categories_by_bank: Mapping[str, Mapping[str, str]]) -> EvidenceT
 
 
 class StubLLM:
-    """Returns fixed text; the category JSON includes valid, invalid and unknown entries."""
+    """Stand-in for LocalLLM: a fixed route (or one chosen per question), a streamed answer and a report.
 
-    def __init__(self) -> None:
-        self.calls = 0
+    ``calls`` records which step called the model: "route", "answer" or "report".
+    """
+
+    def __init__(self, route=None, answer="ING Group has the highest official score (ING Group, p. 111).") -> None:
+        self.route = route
+        self.answer_text = answer
+        self.calls = []
+        self.last_router_prompt = ""
+        self.last_messages = []
+
+    def ask_json(self, system: str, user: str) -> dict:
+        self.calls.append("route")
+        self.last_router_prompt = user
+        question = user.rsplit("Question: ", 1)[-1].split("\n", 1)[0]
+        route = self.route(question) if callable(self.route) else self.route
+        return dict(route or {"banks": [], "indicators": [], "intent": "explain", "scenario": {}})
+
+    def stream(self, messages):
+        self.calls.append("answer")
+        self.last_messages = messages
+        words = self.answer_text.split(" ")
+        for i, word in enumerate(words):
+            yield word + (" " if i < len(words) - 1 else "")
 
     def ask(self, prompt: str) -> str:
-        self.calls += 1
-        if "single JSON object" in prompt:
-            self.last_prompt = prompt
-        if "single JSON object" in prompt:
-            return (
-                "Narrative analysis.\n"
-                '{"climate_plan": "weak", "fossil_policy": "exit", '
-                '"aml_maturity": "excellent", "made_up_key": "x"}'
-            )
-        return "- summary bullet"
+        self.calls.append("report")
+        return "## Stub narrative report"
+
+
+def server_with_stub(stub=None, **kwargs):
+    """An offline Server whose AI assistant uses ``stub`` (no network, no key)."""
+    from server import Server
+
+    server = Server(use_llm=False, **kwargs)
+    stub = stub or StubLLM()
+    server.use_llm = True
+    server.chat.llm = stub
+    server.writer.llm = stub
+    return server, stub

@@ -56,8 +56,9 @@ drop_stale_backend(BACKEND_FINGERPRINT)
 from server import Server  # noqa: E402  (imported after the stale-module check)
 from tools.evidence import REPORTING_YEAR  # noqa: E402
 from tools.quota import DailyLimitReached  # noqa: E402
+from tools.local_llm import LLMUnavailable  # noqa: E402
 from tools.radar_chart import create_esg_radar_chart  # noqa: E402
-from tools.score_engine import PILLAR_NAMES  # noqa: E402
+from tools.score_engine import PILLAR_NAMES, RUBRIC_BY_KEY  # noqa: E402
 
 sys.modules["server"]._backend_fingerprint = BACKEND_FINGERPRINT
 
@@ -98,7 +99,8 @@ server.refresh_llm_status()
 BANKS = server.banks()
 
 st.sidebar.title("⚙️ Configuration")
-mode = st.sidebar.radio("Mode", ["Compare banks", "Single bank"])
+MODES = ["Ask the AI", "Compare banks", "Single bank"]
+mode = st.sidebar.radio("Mode", MODES, index=0 if server.use_llm else 1)
 st.sidebar.markdown("---")
 st.sidebar.markdown(
     f"**How scores are made.** Every score comes from a reviewed evidence table built from the banks' "
@@ -240,92 +242,177 @@ DAILY_LIMIT_MESSAGE = (
 )
 
 
-def render_assistant(assistant: Dict[str, Any], official: Dict[str, Any]) -> None:
-    if not assistant.get("enabled"):
+EXAMPLE_QUESTIONS = (
+    "Which bank is strongest on climate, and why?",
+    "What would ABN AMRO score if it linked 20% of executive pay to ESG targets?",
+    "Why does ABN AMRO lose points on controversy?",
+)
+
+
+def turn_view(turn: Any) -> Dict[str, Any]:
+    """Plain data for one answered question, kept in the session for redrawing the chat."""
+    ctx = turn.context
+    focus = list(dict.fromkeys(list(ctx.route.indicators) + [k for c in ctx.route.scenario.values() for k in c]))
+    evidence = []
+    for card in ctx.cards:
+        rows = {item["key"]: item for item in server.score_bank(card.bank)["breakdown"]}
+        rows["controversy"] = {**server.score_bank(card.bank)["controversy_evidence"], "label": "Controversy"}
+        evidence += [{"bank": card.bank, **rows[key]} for key in focus]
+    return {
+        "question": turn.question,
+        "answer": turn.answer or "",
+        "unknown_citations": list(turn.unknown_citations),
+        "rejected": list(ctx.route.rejected),
+        "ranking": list(ctx.ranking),
+        "scenario_ranking": list(ctx.scenario_ranking) if ctx.scenario_ranking else None,
+        "cards": [
+            {
+                "bank": c.bank,
+                "official": (c.official.final, c.official.label),
+                "ai_reviewer": (c.ai_reviewer.final, c.ai_reviewer.label),
+                "ai_reviewer_differs": [(label_of(k), a, b) for k, a, b in c.ai_reviewer_differs],
+                "scenario": (c.scenario.final, c.scenario.label) if c.scenario else None,
+                "scenario_changes": [(label_of(k), a, b) for k, a, b in c.scenario_changes],
+            }
+            for c in ctx.cards
+        ],
+        "evidence": evidence,
+    }
+
+
+def label_of(key: str) -> str:
+    return RUBRIC_BY_KEY[key].label if key in RUBRIC_BY_KEY else "Controversy"
+
+
+def render_score_card(view: Dict[str, Any]) -> None:
+    """Official, AI reviewer and (for what-if questions) scenario scores for the banks in the answer."""
+    cards = view["cards"]
+    has_scenario = any(c["scenario"] for c in cards)
+    header = "| Bank | Official score | AI reviewer score |" + (" Scenario score |" if has_scenario else "")
+    lines = [header, "|---|---|---|" + ("---|" if has_scenario else "")]
+    for c in cards:
+        official, reviewer = c["official"], c["ai_reviewer"]
+        row = f"| {c['bank']} | **{official[0]:.1f}** · {official[1]} | {reviewer[0]:.1f} · {reviewer[1]} |"
+        if has_scenario:
+            if c["scenario"]:
+                row += f" {c['scenario'][0]:.1f} · {c['scenario'][1]} ({c['scenario'][0] - official[0]:+.1f}) |"
+            else:
+                row += " unchanged |"
+        lines.append(row)
+    st.markdown("\n".join(lines))
+    for c in cards:
+        if c["scenario_changes"]:
+            changes = "; ".join(f"{name} `{a}` → `{b}`" for name, a, b in c["scenario_changes"])
+            st.markdown(f"Scenario for {c['bank']}: {changes}.")
+    if view["scenario_ranking"] and view["scenario_ranking"] != view["ranking"]:
+        st.markdown(
+            "Ranking with the scenario: "
+            + ", ".join(f"{i}. {b}" for i, b in enumerate(view["scenario_ranking"], 1))
+            + " (now: "
+            + ", ".join(f"{i}. {b}" for i, b in enumerate(view["ranking"], 1))
+            + ")."
+        )
+    st.caption(
+        "Official: the analysts' evidence table. AI reviewer: an independent AI reading of each cited page "
+        "(offline review, quotes checked). Scenario: hypothetical, computed by the same scoring engine from the "
+        "category changes listed. Only the official score is used in the benchmark."
+    )
+    differs = [(c["bank"], d) for c in cards for d in c["ai_reviewer_differs"]]
+    if differs:
+        with st.expander(f"Where the AI reviewer differs from the analysts ({len(differs)})"):
+            for bank, (name, a, b) in differs:
+                st.markdown(f"- {bank}, {name}: analysts `{a}`, AI reviewer `{b}`")
+    if view["evidence"]:
+        with st.expander("Evidence behind this answer (verbatim quotes)"):
+            for item in view["evidence"]:
+                quotes = " … ".join(f"\"{q['text']}\" ([p. {q['page']}]({q['page_url']}))" for q in item["quotes"])
+                st.markdown(f"- **{item['bank']}, {item['label']}** (`{item['category']}`): {quotes}")
+    if view["unknown_citations"]:
+        st.warning(
+            "The answer cites pages that are not in the evidence it was given: "
+            + ", ".join(view["unknown_citations"])
+            + ". Treat those statements with care."
+        )
+    if view["rejected"]:
+        st.caption("Parts of the question could not be mapped to the rubric: " + "; ".join(view["rejected"]))
+
+
+def render_turn(view: Dict[str, Any]) -> None:
+    with st.chat_message("user"):
+        st.markdown(view["question"])
+    with st.chat_message("assistant"):
+        st.markdown(view["answer"])
+        render_score_card(view)
+
+
+def render_chat() -> None:
+    st.title("💬 Ask about the banks' ESG scores")
+    st.caption(
+        f"Ask anything about ING Group, ABN AMRO and Rabobank's {REPORTING_YEAR} ESG scores, including what-if "
+        "questions. Answers use only the reviewed evidence table and cite report pages; every score is computed "
+        "by the scoring engine, never by the AI."
+    )
+    if not server.use_llm:
         st.info(
-            "The AI assistant is off because no LLM is configured for this app. It is optional and never "
-            "changes the scores. To try it on your own computer, set OLLAMA_API_KEY in .env (Ollama Cloud) "
-            "or run a local Ollama server."
+            "The AI assistant is off because no LLM is configured for this app. The benchmark itself works without "
+            "it: see Compare banks and Single bank. To try the assistant on your own computer, set OLLAMA_API_KEY "
+            "in .env (Ollama Cloud) or run a local Ollama server."
         )
         return
-    if assistant.get("error"):
-        st.warning(f"The AI assistant stopped early: {assistant['error']}")
+    limit = int(os.getenv("AI_QUESTIONS_PER_SESSION", "5"))
+    used = st.session_state.get("ai_questions_used", 0)
+    left_today = server.ai_requests_left_today()
+    st.caption(
+        f"Model: {server.llm.describe()}. Questions left in this session: {max(limit - used, 0)} of {limit}. "
+        f"AI requests left today for the whole site: {left_today} of {server.ai_quota.limit}."
+    )
+    history: List[Dict[str, Any]] = st.session_state.setdefault("chat", [])
+    for view in history:
+        render_turn(view)
 
-    if assistant.get("analysis_text"):
-        st.markdown(f"**AI answer** ({assistant.get('model', 'LLM')}, not used in score)")
-        st.markdown(assistant["analysis_text"])
+    blocked = used >= limit or left_today == 0
+    if used >= limit:
+        st.info(f"This demo allows {limit} AI questions per visit, to stay within the free API quota.")
+    elif left_today == 0:
+        st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
 
-    estimate = assistant.get("ai_estimate")
-    if estimate:
-        st.markdown("**AI estimate vs official score**")
-        ai = estimate["scores"]
-        c1, c2 = st.columns(2)
-        c1.metric("Official score (evidence)", f"{official['final']:.1f}")
-        c2.metric(
-            "AI estimate (not official)",
-            f"{ai['final']:.1f}",
-            delta=f"{ai['final'] - official['final']:+.1f}",
-            delta_color="off",
-        )
-        # Labels as plain text: metric values are cut off with "..." in narrow columns.
-        st.markdown(f"Compliance label: official **{official['label']}** · AI estimate **{ai['label']}**")
-        if estimate["changed"]:
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {"Indicator": c["label"], "Evidence category (official)": c["evidence_category"], "AI category": c["ai_category"]}
-                        for c in estimate["changed"]
-                    ]
-                ),
-                hide_index=True,
-            )
-        else:
-            st.caption("The AI chose the same category as the evidence for every indicator it classified.")
-        if estimate["kept_from_evidence"]:
-            st.caption(
-                f"{len(estimate['kept_from_evidence'])} indicator(s) the AI did not classify keep the evidence category "
-                "in the estimate. The estimate uses the same scoring engine as the official score."
-            )
-
-    if assistant.get("suggestions"):
-        with st.expander("All AI category suggestions (not used in score)"):
-            st.dataframe(
-                pd.DataFrame(
-                    [
-                        {
-                            "Indicator": s["label"],
-                            "Evidence category (used)": s["evidence_category"],
-                            "AI suggestion (not used)": s["ai_suggestion"] or "-",
-                            "Agrees": "✓" if s["agrees"] else "",
-                        }
-                        for s in assistant["suggestions"]
-                    ]
-                ),
-                hide_index=True,
-            )
-            if assistant.get("rejected"):
-                st.caption(f"AI values outside the rubric were ignored: {assistant['rejected']}")
-
-    for title, key in (
-        ("AI summary of the uploaded PDF", "pdf_summary"),
-        ("AI summary of ESG news", "news_summary"),
-    ):
-        if assistant.get(key):
-            with st.expander(f"{title} (not used in score)"):
-                st.markdown(assistant[key])
-
-
-def render_report(bank: str, assistant: Dict[str, Any]) -> None:
-    """Narrative report, written only when the visitor asks for it (one extra AI request)."""
-    if not assistant.get("enabled"):
+    question = None
+    if not history:
+        st.markdown("**Try one of these:**")
+        for i, example in enumerate(EXAMPLE_QUESTIONS):
+            if st.button(example, key=f"example_{i}", disabled=blocked):
+                question = example
+    typed = st.chat_input("Ask about ING Group, ABN AMRO or Rabobank", disabled=blocked)
+    question = typed or question
+    if not question:
         return
+
+    with st.chat_message("user"):
+        st.markdown(question)
+    with st.chat_message("assistant"):
+        try:
+            turn = server.chat_turn(question, [(v["question"], v["answer"]) for v in history])
+            st.write_stream(server.stream_answer(turn))
+        except DailyLimitReached:
+            st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+            return
+        except LLMUnavailable as exc:
+            st.warning(f"The AI assistant could not answer: {exc}")
+            return
+    history.append(turn_view(turn))
+    if not turn.from_cache:  # an answer from the cache makes no AI request
+        st.session_state["ai_questions_used"] = used + 1
+    st.rerun()  # redraw the chat with the score card and the new counts
+
+
+def render_report(bank: str) -> None:
+    """Narrative report, written only when the visitor asks for it (one AI request)."""
     report = st.session_state.get(f"ai_report_{bank}")
     if report:
         with st.expander("AI narrative report (not used in score)", expanded=True):
             st.markdown(report)
         return
-    news_summary = assistant.get("news_summary", "")
-    no_requests_left = server.ai_requests_left_today() == 0 and not server.has_cached_report(bank, news_summary)
+    no_requests_left = server.ai_requests_left_today() == 0 and not server.has_cached_report(bank)
     if st.button(
         "Write an AI narrative report",
         key=f"report_button_{bank}",
@@ -334,33 +421,13 @@ def render_report(bank: str, assistant: Dict[str, Any]) -> None:
     ):
         try:
             with st.spinner("Writing the report (this can take a minute)..."):
-                st.session_state[f"ai_report_{bank}"] = server.write_report(bank, news_summary)
+                st.session_state[f"ai_report_{bank}"] = server.write_report(bank)
         except DailyLimitReached:
             st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
         except Exception as exc:  # the report is optional; scores are unaffected
             st.warning(f"The AI report could not be written: {exc}")
         else:
             st.rerun()
-
-
-def render_context(result: Dict[str, Any]) -> None:
-    with st.expander("🔎 News and market context (not used in score)"):
-        c1, c2 = st.columns(2)
-        with c1:
-            st.markdown("**Yahoo Finance snapshot**")
-            st.write(result["yahoo"]["snapshot"] or "No Yahoo data available.")
-        with c2:
-            st.markdown("**Google News RSS**")
-            items = result["news"]["items"]
-            if not items:
-                st.info("No news items fetched.")
-            for it in items[:10]:
-                line = f"- [{it['headline']}]({it['url']})" if it["url"] else f"- {it['headline']}"
-                if it["source"]:
-                    line += f" - *{it['source']}*"
-                if it["published"]:
-                    line += f" - {it['published']}"
-                st.markdown(line)
 
 
 def render_compare_charts(df: pd.DataFrame) -> None:
@@ -535,8 +602,12 @@ def render_ai_review_summary(summary: Dict[str, Any]) -> None:
     )
 
 
+# MODE 0 - Ask the AI
+if mode == "Ask the AI":
+    render_chat()
+
 # MODE 1 - Compare banks
-if mode == "Compare banks":
+elif mode == "Compare banks":
     st.title("🏆 Dutch bank ESG benchmark")
     st.caption(f"Evidence: {REPORTING_YEAR} annual reports of ING Group, ABN AMRO and Rabobank.")
 
@@ -605,55 +676,8 @@ else:
     st.markdown("### 📑 Score breakdown")
     render_breakdown(scored)
 
-    st.markdown("---")
-    st.markdown("### 🤖 Ask the AI assistant")
-    if not server.use_llm:
-        render_assistant({"enabled": False}, scored["scores"])
-    else:
-        limit = int(os.getenv("AI_QUESTIONS_PER_SESSION", "5"))
-        used = st.session_state.get("ai_questions_used", 0)
-        left_today = server.ai_requests_left_today()
-        st.caption(
-            f"Model: {server.llm.describe()}. The AI answers from the reviewed evidence above (plus recent news), "
-            "suggests rubric categories, and shows the score those categories would give. It never changes the "
-            f"official score. Questions left in this session: {max(limit - used, 0)} of {limit}. "
-            f"AI requests left today for the whole site: {left_today} of {server.ai_quota.limit}."
-        )
-        question = st.text_area(
-            "Your question",
-            placeholder=f"e.g. How credible is {bank}'s climate transition plan, and what would change its score?",
-            height=100,
-            key=f"question_{bank}",
-        )
-        uploaded_pdf = st.file_uploader("Extra PDF for the AI (optional)", type=["pdf"], key=f"pdf_{bank}")
-        if used >= limit:
-            st.info(f"This demo allows {limit} AI questions per visit, to stay within the free API quota.")
-        elif left_today == 0:
-            st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
-        if st.button("Ask", type="primary", disabled=used >= limit or left_today == 0):
-            pdf_text = ""
-            if uploaded_pdf is not None:
-                from tools.pdf_fetcher import pdf_bytes_to_text
-
-                pdf_text = pdf_bytes_to_text(uploaded_pdf.getvalue())
-            # A question answered from the cache makes no AI request, so it is not counted.
-            cached = server.has_cached_analysis(bank, question or None, pdf_text or None)
-            try:
-                with st.spinner("Asking the AI (this can take about a minute; repeated questions are faster)..."):
-                    st.session_state[f"ai_result_{bank}"] = server.analyze_bank(
-                        bank=bank,
-                        question=question or None,
-                        pdf_text=pdf_text or None,
-                        pdf_filename=uploaded_pdf.name if uploaded_pdf else None,
-                    )
-            except DailyLimitReached:
-                st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
-            else:
-                if not cached:
-                    st.session_state["ai_questions_used"] = used + 1
-                st.rerun()  # redraw so the captions show the new counts
-        result = st.session_state.get(f"ai_result_{bank}")
-        if result:
-            render_assistant(result["assistant"], scored["scores"])
-            render_report(bank, result["assistant"])
-            render_context(result)
+    if server.use_llm:
+        st.markdown("---")
+        st.markdown("### 🤖 AI narrative report")
+        st.caption("Have a question about this bank? Use **Ask the AI** in the sidebar.")
+        render_report(bank)
