@@ -11,6 +11,7 @@ KEY_PATTERNS = [
     re.compile(r"AIza[0-9A-Za-z_\-]{35}"),  # Google API keys
     re.compile(r"gsk_[0-9A-Za-z]{40,}"),  # Groq API keys
     re.compile(r"sk-[0-9A-Za-z_\-]{32,}"),  # OpenAI-style keys
+    re.compile(r"(OLLAMA|GEMINI|GROQ)_API_KEY[ \t]*=[ \t]*[^\s#]+"),  # a filled-in .env line
 ]
 
 

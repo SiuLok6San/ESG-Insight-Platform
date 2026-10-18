@@ -81,3 +81,14 @@ def test_ollama_needs_no_key_and_groq_needs_a_model(tmp_path):
     assert OpenAICompatibleClient("ollama", cache_dir=tmp_path)._api_key() is None
     with pytest.raises(ValueError, match="explicit model"):
         OpenAICompatibleClient("groq", cache_dir=tmp_path)
+
+
+def test_ollama_cloud_is_the_default_provider(tmp_path, monkeypatch):
+    monkeypatch.setenv("OLLAMA_API_KEY", FAKE_KEY)
+    monkeypatch.setattr(llm_provider.time, "sleep", lambda s: None)
+    client = OpenAICompatibleClient(cache_dir=tmp_path, min_interval_s=0)
+    with mock.patch("tools.llm_provider.requests.post", return_value=FakeResponse()) as post:
+        client.chat_json("s", "u")
+    assert post.call_args.args[0] == "https://ollama.com/v1/chat/completions"
+    assert post.call_args.kwargs["json"]["model"] == "gemma4:31b"
+    assert post.call_args.kwargs["headers"]["Authorization"] == f"Bearer {FAKE_KEY}"

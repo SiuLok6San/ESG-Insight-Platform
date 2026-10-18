@@ -1,4 +1,4 @@
-"""Minimal client for OpenAI-compatible chat APIs (Gemini, Groq, Ollama).
+"""Minimal client for OpenAI-compatible chat APIs (Ollama Cloud, Gemini, Groq, local Ollama).
 
 Used by the offline AI evidence review (``scripts/review_evidence.py``).
 Requests use temperature 0 and ask for a JSON object; every response is
@@ -36,6 +36,7 @@ PROVIDERS: Dict[str, ProviderConfig] = {
     ),
     "groq": ProviderConfig("groq", "https://api.groq.com/openai/v1/", None, "GROQ_API_KEY"),
     "ollama": ProviderConfig("ollama", "http://localhost:11434/v1/", "llama3", None),
+    "ollama-cloud": ProviderConfig("ollama-cloud", "https://ollama.com/v1/", "gemma4:31b", "OLLAMA_API_KEY"),
 }
 
 
@@ -55,7 +56,7 @@ def _strip_code_fence(text: str) -> str:
 class OpenAICompatibleClient:
     def __init__(
         self,
-        provider: str = "gemini",
+        provider: str = "ollama-cloud",
         model: Optional[str] = None,
         cache_dir: Optional[Path] = CACHE_DIR,
         timeout: int = 120,

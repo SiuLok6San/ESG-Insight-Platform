@@ -1,8 +1,8 @@
 """Run the offline AI evidence review and save it to data/evidence/ai_review.csv.
 
-Usage (from the repository root, with GEMINI_API_KEY set in .env):
+Usage (from the repository root, with OLLAMA_API_KEY set in .env):
 
-    python -m scripts.review_evidence                 # all banks, Gemini
+    python -m scripts.review_evidence                 # all banks, Ollama Cloud
     python -m scripts.review_evidence --bank "ING Group" --limit 3
     python -m scripts.review_evidence --dry-run       # build prompts only, no API calls
 
@@ -31,7 +31,7 @@ class _LimitReached(Exception):
 
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--provider", choices=sorted(PROVIDERS), default="gemini")
+    parser.add_argument("--provider", choices=sorted(PROVIDERS), default="ollama-cloud")
     parser.add_argument("--model", help="override the provider's default model")
     parser.add_argument("--bank", action="append", help="review only this bank (repeatable)")
     parser.add_argument("--limit", type=int, help="stop after this many rows (for a trial run)")

@@ -91,7 +91,7 @@ A tie between banks counts as a ranking change.
 - For each row, an LLM reads only the cited PDF page and answers three things: does the page support the evidence summary; which category it would assign from the written definitions; which passage backs its answer.
 - The passage must be quoted verbatim, and the code checks that it really appears on the page, so an invented quote is flagged rather than trusted.
 - Results are saved in `data/evidence/ai_review.csv` and shown in the app as "AI check, not used in score". Disagreements are prompts to re-check a row; they never change a category.
-- The client in [`tools/llm_provider.py`](tools/llm_provider.py) works with any OpenAI-compatible API (Gemini by default; Groq or a local Ollama by configuration).
+- The client in [`tools/llm_provider.py`](tools/llm_provider.py) works with any OpenAI-compatible API: Ollama Cloud by default, or Gemini, Groq or a local Ollama by configuration.
 
 ## Screenshots
 
@@ -135,7 +135,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example).
 
-To run the tests (89 tests, no LLM or network needed):
+To run the tests (90 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -145,7 +145,7 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-To re-run the AI evidence review, put a Gemini API key in `.env` as `GEMINI_API_KEY` (see [`.env.example`](.env.example)). Then:
+To re-run the AI evidence review, put an Ollama Cloud API key in `.env` as `OLLAMA_API_KEY` (see [`.env.example`](.env.example)). Then:
 
 ```bash
 python -m scripts.review_evidence
@@ -179,7 +179,7 @@ python -m scripts.review_evidence
 │   ├── evidence.py              # Loads and validates the evidence table
 │   ├── sensitivity.py           # Weight and judgment sensitivity analysis
 │   ├── ai_review.py             # AI evidence review: prompts, quote check, results file
-│   ├── llm_provider.py          # OpenAI-compatible client (Gemini, Groq, Ollama)
+│   ├── llm_provider.py          # OpenAI-compatible client (Ollama Cloud, Gemini, Groq, local Ollama)
 │   ├── local_llm.py             # Optional Ollama client (temperature 0, fixed seed, cache)
 │   ├── pdf_fetcher.py           # Downloads the cited annual report
 │   ├── pdf_summarizer.py        # LLM report summary (advisory only)
