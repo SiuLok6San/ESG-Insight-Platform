@@ -54,9 +54,9 @@ BACKEND_FINGERPRINT = backend_fingerprint()
 drop_stale_backend(BACKEND_FINGERPRINT)
 
 from server import Server  # noqa: E402  (imported after the stale-module check)
-from tools.evidence import REPORTING_YEAR  # noqa: E402
+from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR  # noqa: E402
 from tools.quota import DailyLimitReached  # noqa: E402
-from tools.local_llm import LLMUnavailable  # noqa: E402
+from tools.local_llm import LLMBusy, LLMUnavailable  # noqa: E402
 from tools.radar_chart import create_esg_radar_chart  # noqa: E402
 from tools.score_engine import PILLAR_NAMES, RUBRIC_BY_KEY  # noqa: E402
 
@@ -98,10 +98,7 @@ server = get_server(BACKEND_FINGERPRINT)
 server.refresh_llm_status()
 BANKS = server.banks()
 
-st.sidebar.title("⚙️ Configuration")
-MODES = ["Ask the AI", "Compare banks", "Single bank"]
-mode = st.sidebar.radio("Mode", MODES, index=0 if server.use_llm else 1)
-st.sidebar.markdown("---")
+st.sidebar.title("📊 Dutch bank ESG benchmark")
 st.sidebar.markdown(
     f"**How scores are made.** Every score comes from a reviewed evidence table built from the banks' "
     f"{REPORTING_YEAR} annual reports: 14 rubric indicators across Environmental, Social and Governance "
@@ -121,17 +118,22 @@ st.sidebar.markdown(
 # Rendering helpers
 def render_score_cards(scores: Dict[str, Any]) -> None:
     p = scores["pillars"]
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Environmental (E)", f"{p['E']:.1f}")
-    c2.metric("Social (S)", f"{p['S']:.1f}")
-    c3.metric("Governance (G)", f"{p['G']:.1f}")
-    c4.metric(
-        f"Controversy ({scores['controversy']})",
-        f"−{scores['controversy_deduction']:.1f}",
-        help=f"Points deducted from the weighted E/S/G score ({scores['weighted']:.1f}).",
+    # A wrapping row: one line on wide screens, two cards per line on phones (columns would stack them all).
+    with st.container(horizontal=True, gap="small"):
+        st.metric("Environmental", f"{p['E']:.1f}", width=125)
+        st.metric("Social", f"{p['S']:.1f}", width=125)
+        st.metric("Governance", f"{p['G']:.1f}", width=125)
+        st.metric(
+            "Controversy",
+            f"−{scores['controversy_deduction']:.1f}",
+            help=f"Category `{scores['controversy']}`: points deducted from the weighted E/S/G score ({scores['weighted']:.1f}).",
+            width=125,
+        )
+        st.metric("Final score", f"{scores['final']:.1f}", help="0.35×E + 0.30×S + 0.35×G − controversy deduction", width=125)
+    st.markdown(
+        f"**Compliance label: {scores['label']}** · controversy `{scores['controversy']}` · "
+        "Meet ≥ 75, Almost Meet ≥ 50, otherwise Not Meet"
     )
-    c5.metric("Final ESG score", f"{scores['final']:.1f}", help="0.35×E + 0.30×S + 0.35×G − controversy deduction")
-    st.markdown(f"**Compliance label:** {scores['label']}  ·  Meet ≥ 75, Almost Meet ≥ 50, otherwise Not Meet")
 
 
 def render_calculation(scores: Dict[str, Any]) -> None:
@@ -236,6 +238,10 @@ def render_breakdown(result: Dict[str, Any]) -> None:
                 st.markdown(f"- **{item['label']}**: {item['notes']}")
 
 
+BUSY_MESSAGE = (
+    "The free AI service is busy right now: it answers one request at a time for all visitors. Please try again "
+    "in a minute. This question was not counted."
+)
 DAILY_LIMIT_MESSAGE = (
     "The demo has used its {limit} AI requests for today (shared by all visitors), to stay within the free "
     "API quota. The limit resets at midnight UTC."
@@ -262,6 +268,7 @@ def turn_view(turn: Any) -> Dict[str, Any]:
         "question": turn.question,
         "answer": turn.answer or "",
         "unknown_citations": list(turn.unknown_citations),
+        "unknown_numbers": list(getattr(turn, "unknown_numbers", [])),
         "rejected": list(ctx.route.rejected),
         "ranking": list(ctx.ranking),
         "scenario_ranking": list(ctx.scenario_ranking) if ctx.scenario_ranking else None,
@@ -312,10 +319,6 @@ def render_score_card(view: Dict[str, Any]) -> None:
             + ", ".join(f"{i}. {b}" for i, b in enumerate(view["ranking"], 1))
             + ")."
         )
-    st.caption(
-        f"Official: the analysts' evidence table. {server.ai_reviewer_note()} Scenario: hypothetical, computed by "
-        "the same scoring engine from the category changes listed. Only the official score is used in the benchmark."
-    )
     differs = [(c["bank"], d) for c in cards for d in c["ai_reviewer_differs"]]
     if differs:
         with st.expander(f"Where the AI reviewer differs from the analysts ({len(differs)})"):
@@ -331,6 +334,12 @@ def render_score_card(view: Dict[str, Any]) -> None:
             "The answer cites pages that are not in the evidence it was given: "
             + ", ".join(view["unknown_citations"])
             + ". Treat those statements with care."
+        )
+    if view.get("unknown_numbers"):
+        st.warning(
+            "The answer mentions numbers that are not in the scores or evidence it was given: "
+            + ", ".join(view["unknown_numbers"])
+            + ". The score card above shows the computed values."
         )
     if view["rejected"]:
         st.caption("Parts of the question could not be mapped to the rubric: " + "; ".join(view["rejected"]))
@@ -354,7 +363,7 @@ def render_chat() -> None:
     if not server.use_llm:
         st.info(
             "The AI assistant is off because no LLM is configured for this app. The benchmark itself works without "
-            "it: see Compare banks and Single bank. To try the assistant on your own computer, set OLLAMA_API_KEY "
+            "it: see Compare and Bank detail above. To try the assistant on your own computer, set OLLAMA_API_KEY "
             "in .env (Ollama Cloud) or run a local Ollama server."
         )
         return
@@ -365,6 +374,15 @@ def render_chat() -> None:
         f"Model: {server.llm.describe()}. Questions left in this session: {max(limit - used, 0)} of {limit}. "
         f"AI requests left today for the whole site: {left_today} of {server.ai_quota.limit}."
     )
+    with st.expander("How to read the score card"):
+        st.markdown(
+            "- **Official score:** from the analysts' evidence table; the only score used in the benchmark.\n"
+            f"- **AI reviewer score:** the same scoring engine applied to other categories. {server.ai_reviewer_note()}\n"
+            "- **Scenario score:** for what-if questions; hypothetical, computed by the same engine from the category "
+            "changes listed under the card.\n"
+            "- Every number on the card is computed by code. A warning appears under an answer if it cites a page, "
+            "or mentions a number, that is not in the evidence and scores the AI was given."
+        )
     history: List[Dict[str, Any]] = st.session_state.setdefault("chat", [])
     for view in history:
         render_turn(view)
@@ -390,10 +408,14 @@ def render_chat() -> None:
         st.markdown(question)
     with st.chat_message("assistant"):
         try:
-            turn = server.chat_turn(question, [(v["question"], v["answer"]) for v in history])
+            with st.spinner("Reading your question..."):
+                turn = server.chat_turn(question, [(v["question"], v["answer"]) for v in history])
             st.write_stream(server.stream_answer(turn))
         except DailyLimitReached:
             st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+            return
+        except LLMBusy:
+            st.warning(BUSY_MESSAGE)
             return
         except LLMUnavailable as exc:
             st.warning(f"The AI assistant could not answer: {exc}")
@@ -423,6 +445,8 @@ def render_report(bank: str) -> None:
                 st.session_state[f"ai_report_{bank}"] = server.write_report(bank)
         except DailyLimitReached:
             st.info(DAILY_LIMIT_MESSAGE.format(limit=server.ai_quota.limit))
+        except LLMBusy:
+            st.warning(BUSY_MESSAGE)
         except Exception as exc:  # the report is optional; scores are unaffected
             st.warning(f"The AI report could not be written: {exc}")
         else:
@@ -601,12 +625,126 @@ def render_ai_review_summary(summary: Dict[str, Any]) -> None:
     )
 
 
-# MODE 0 - Ask the AI
-if mode == "Ask the AI":
+REPO_URL = "https://github.com/SiuLok6San/ESG-Insight-Platform/blob/main"
+
+
+def render_method() -> None:
+    st.title("📚 Method & data")
+    st.markdown(
+        f"- **Evidence:** one row per bank and indicator (45 rows) from the banks' {REPORTING_YEAR} annual reports, "
+        "each with a category, a summary, a page citation and a verbatim quote.\n"
+        "- **Rubric:** 14 indicators, each category mapped to a fixed 0-100 score; pillar weights E 35%, S 30%, "
+        "G 35%.\n"
+        "- **Controversy:** a deduction of 0, 2 or 5 points for ESG-related legal or regulatory matters in the "
+        "reporting year.\n"
+        "- **Label:** Meet ≥ 75, Almost Meet ≥ 50, otherwise Not Meet, from the one-decimal final score.\n"
+        "- **AI:** advisory only. It never sets a category or a score.\n\n"
+        f"Full details: [README]({REPO_URL}/README.md#methodology) and "
+        f"[category definitions]({REPO_URL}/data/evidence/category_definitions.md)."
+    )
+
+    st.markdown("### 🗂️ Evidence table")
+    rows = []
+    for bank in BANKS:
+        for item in server.score_bank(bank)["breakdown"]:
+            rows.append(
+                {
+                    "Bank": bank,
+                    "Indicator": item["label"],
+                    "Category": item["category"],
+                    "Score": item["score"],
+                    "Page": item["page_url"],
+                    "Evidence": item["evidence_summary"],
+                }
+            )
+        c = server.score_bank(bank)["controversy_evidence"]
+        rows.append(
+            {"Bank": bank, "Indicator": "Controversy", "Category": c["category"], "Score": None,
+             "Page": c["page_url"], "Evidence": c["evidence_summary"]}
+        )
+    st.dataframe(
+        pd.DataFrame(rows),
+        hide_index=True,
+        column_config={"Page": st.column_config.LinkColumn(display_text=r"#page=(\d+)")},
+    )
+    st.download_button(
+        "Download the evidence table (CSV, with verbatim quotes)",
+        data=EVIDENCE_PATH.read_bytes(),
+        file_name="esg_evidence.csv",
+        mime="text/csv",
+    )
+
+    st.markdown("### ✅ Data quality checks")
+    quotes = server.quote_check_summary()
+    st.markdown(
+        f"- **Verbatim quotes checked against the PDFs:** {quotes['verified']} of {quotes['excerpts']} excerpts found "
+        f"on their page ([how]({REPO_URL}/scripts/verify_quotes.py)).\n"
+        f"- **Re-check of flagged rows and the analysts' decisions:** "
+        f"[evidence_recheck.md]({REPO_URL}/docs/evidence_recheck.md).\n"
+        f"- **Number-based categories and continuous scoring:** [scoring_options.md]({REPO_URL}/docs/scoring_options.md)."
+    )
+    render_blind_review_summary(server.blind_review_summary())
+    render_ai_review_summary(server.ai_review_summary())
+
+
+def render_blind_review_summary(summary: Dict[str, Any]) -> None:
+    st.markdown("### 🙈 Blind AI review (not used in score)")
+    if not summary["rows"]:
+        st.caption("The blind AI review has not been run yet.")
+        return
+    n = summary["rows"]
+    st.markdown(
+        f"An LLM ({', '.join(summary['models'])}, run on {', '.join(summary['reviewed_on'])}) rated every row from "
+        "the report pages and the written definitions only, without seeing the analysts' categories:\n"
+        f"- **Same category as the analysts:** {summary['category_agrees']} of {n}\n"
+        f"- **Quote found verbatim on the pages:** {summary['quote_verified']} of {n}\n\n"
+        "Its categories give the AI reviewer score in the chat. "
+        f"[Full report]({REPO_URL}/docs/blind_review.md)"
+    )
+    if summary["disagreements"]:
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "Bank": r["bank"],
+                        "Indicator": label_of(r["indicator"]),
+                        "Analysts": r["analyst_category"],
+                        "Blind AI": r["ai_category"],
+                        "Blind AI's reasoning": r["explanation"],
+                    }
+                    for r in summary["disagreements"]
+                ]
+            ),
+            hide_index=True,
+        )
+        st.caption("The analysts reviewed both disagreements and kept their categories; see the re-check worksheet.")
+
+
+# Navigation across the top of the page (the sidebar is hidden on phones).
+SECTIONS = {"ask": "Ask", "compare": "Compare", "bank": "Bank detail", "method": "Method & data"}
+ICONS = {"Ask": "💬", "Compare": "🏆", "Bank detail": "🔍", "Method & data": "📚"}
+default_section = "Ask" if server.use_llm else "Compare"
+requested = SECTIONS.get(st.query_params.get("section", ""), default_section)
+mode = st.segmented_control(
+    "Section",
+    list(SECTIONS.values()),
+    default=requested,
+    format_func=lambda name: f"{ICONS[name]} {name}",
+    label_visibility="collapsed",
+    key="section",
+) or default_section
+st.query_params["section"] = next(slug for slug, name in SECTIONS.items() if name == mode)
+
+# Ask the AI
+if mode == "Ask":
     render_chat()
 
-# MODE 1 - Compare banks
-elif mode == "Compare banks":
+# Method & data
+elif mode == "Method & data":
+    render_method()
+
+# Compare banks
+elif mode == "Compare":
     st.title("🏆 Dutch bank ESG benchmark")
     st.caption(f"Evidence: {REPORTING_YEAR} annual reports of ING Group, ABN AMRO and Rabobank.")
 
@@ -646,7 +784,6 @@ elif mode == "Compare banks":
     )
     render_compare_charts(df)
     render_robustness(server.sensitivity(comparison["ranking"]), comparison["ranking"])
-    render_ai_review_summary(server.ai_review_summary())
 
     st.markdown("### 📡 Radar charts")
     cols = st.columns(len(comparison["ranking"]))
@@ -660,9 +797,9 @@ elif mode == "Compare banks":
             render_score_cards(per_bank[bank]["scores"])
             render_breakdown(per_bank[bank])
 
-# MODE 2 - Single bank
+# Bank detail
 else:
-    st.title("🔍 Single bank")
+    st.title("🔍 Bank detail")
     bank = st.selectbox("Bank", BANKS)
 
     scored = server.score_bank(bank)
@@ -678,5 +815,5 @@ else:
     if server.use_llm:
         st.markdown("---")
         st.markdown("### 🤖 AI narrative report")
-        st.caption("Have a question about this bank? Use **Ask the AI** in the sidebar.")
+        st.caption("Have a question about this bank? Use **💬 Ask** at the top of the page.")
         render_report(bank)

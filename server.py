@@ -16,6 +16,7 @@ from tools.blind_review import BLIND_REVIEW_PATH, load_results as load_blind_res
 from tools.evidence import EVIDENCE_PATH, REPORTING_YEAR, EvidenceRow, load_evidence
 from tools.local_llm import LLMUnavailable, LocalLLM
 from tools.quota import DailyLimitReached, DailyQuota
+from tools.quotes import load_quote_checks
 from tools.score_engine import CONTROVERSY_KEY, ScoreEngine, ScoreEngineConfig, allowed_categories
 from tools.sensitivity import run_sensitivity
 
@@ -33,6 +34,7 @@ class ChatTurn:
     cache_key: str
     answer: Optional[str] = None
     unknown_citations: List[str] = field(default_factory=list)
+    unknown_numbers: List[str] = field(default_factory=list)
     from_cache: bool = False
 
 
@@ -181,7 +183,11 @@ class Server:
             return turn
         if not self.ai_quota.try_consume():
             raise DailyLimitReached(self.ai_quota.limit)
-        route = self.chat.route(question, history)
+        try:
+            route = self.chat.route(question, history)
+        except LLMUnavailable:
+            self.ai_quota.refund()  # nothing was answered, so the request does not count
+            raise
         return ChatTurn(question=question, history=history, context=self.chat.context(route), cache_key=cache_key)
 
     def stream_answer(self, turn: ChatTurn) -> Iterator[str]:
@@ -190,11 +196,16 @@ class Server:
             yield turn.answer
             return
         parts: List[str] = []
-        for piece in self.chat.answer(turn.question, turn.history, turn.context):
-            parts.append(piece)
-            yield piece
+        try:
+            for piece in self.chat.answer(turn.question, turn.history, turn.context):
+                parts.append(piece)
+                yield piece
+        except LLMUnavailable:
+            self.ai_quota.refund()  # no complete answer, so the request does not count
+            raise
         turn.answer = "".join(parts).strip()
         turn.unknown_citations = self.chat.unknown_citations(turn.answer, turn.context)
+        turn.unknown_numbers = self.chat.unknown_numbers(turn.answer, turn.context)
         self._cache_put(turn.cache_key, {"turn": turn})
 
     def write_report(self, bank: str) -> str:
@@ -208,7 +219,11 @@ class Server:
         if not self.ai_quota.try_consume():
             raise DailyLimitReached(self.ai_quota.limit)
         scored = self.score_bank(bank)
-        report = self.writer.run(bank=bank, scores=scored["scores"], breakdown=scored["breakdown"])
+        try:
+            report = self.writer.run(bank=bank, scores=scored["scores"], breakdown=scored["breakdown"])
+        except LLMUnavailable:
+            self.ai_quota.refund()
+            raise
         self._cache_put(cache_key, {"report": report})
         return report
 
@@ -257,6 +272,24 @@ class Server:
                 if r["ai_verdict"] != "supports" or not r["category_agrees"] or not r["quote_verified"]
             ],
         }
+
+    def blind_review_summary(self) -> Dict[str, Any]:
+        """Agreement of the blind AI review with the analysts; ``rows`` is 0 if it has not been run."""
+        rows = list(self.blind_reviews.values())
+        return {
+            "rows": len(rows),
+            "category_agrees": sum(bool(r["category_agrees"]) for r in rows),
+            "quote_verified": sum(bool(r["quote_verified"]) for r in rows),
+            "models": sorted({f"{r['provider']}/{r['model']}" for r in rows}),
+            "reviewed_on": sorted({str(r["reviewed_on"]) for r in rows}),
+            "disagreements": [dict(r) for r in rows if not r["category_agrees"]],
+        }
+
+    def quote_check_summary(self) -> Dict[str, int]:
+        """How many verbatim excerpts in the evidence table were found on their PDF page."""
+        checks = load_quote_checks()
+        excerpts = sum(len(row.excerpts()) for row in self.evidence.rows)
+        return {"excerpts": excerpts, "checked": len(checks), "verified": sum(c.verified for c in checks.values())}
 
     def sensitivity(self, banks: List[str]) -> Dict[str, Any]:
         """Weight and judgment sensitivity of the ranking and labels (see tools/sensitivity.py)."""

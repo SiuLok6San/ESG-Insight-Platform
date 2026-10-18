@@ -4,7 +4,7 @@
 
 An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
-**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). The first page is a chat: ask about the three banks' ESG scores, including what-if questions (5 questions per visit, and 50 AI requests per day for the whole site). If the app has been idle, it may take about 30 seconds to wake up.
+**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). The site has four sections across the top: **Ask** (a chat about the three banks' ESG scores, including what-if questions; 5 questions per visit and 50 AI requests per day for the whole site), **Compare**, **Bank detail** and **Method & data**. Links such as `?section=method` open a section directly. If the app has been idle, it may take about 30 seconds to wake up.
 
 ## Context
 
@@ -108,7 +108,9 @@ Each answer comes with a score card and the verbatim quotes it could use. The mo
 - The model is Ollama Cloud `gemma4:31b` online, or a local Ollama server. Calls use temperature 0 and a fixed seed, and responses are cached by a hash of the input.
 - In a live test on 18 October 2026, the first words of an answer appeared after about 3 seconds and the full answer after about 4 seconds.
 - To stay within the free API quota, the online demo allows 5 questions per visit and 50 AI requests per day for the whole site (questions and narrative reports together). The per-visit limit resets when the page is reloaded; the daily limit does not, and resets at midnight UTC or when the app restarts. Answers served from the cache do not count.
-- A narrative report for one bank can be written on request from the Single bank page.
+- A narrative report for one bank can be written on request from the Bank detail page.
+- **Numbers and pages are checked.** After each answer, code flags any page citation that is not in the evidence the model was given and any number that appears in neither the scores nor that evidence. Page numbers and small counts are not checked.
+- **A busy AI service fails fast.** The free Ollama Cloud tier answers one request at a time per key, with a short queue. Chat calls time out after 45 seconds and retry at most once, and only if the wait is under 20 seconds. Otherwise the visitor sees "The free AI service is busy right now" and the request is not counted. The settings are `LLM_CHAT_TIMEOUT` and `LLM_CHAT_RETRIES`.
 
 **8. AI evidence review.** An independent second check of the evidence table, run once offline with [`scripts/review_evidence.py`](scripts/review_evidence.py):
 - For each row, an LLM is given the cited PDF page (and no other page), the analysts' summary and category, and the written definitions. It answers three things: does the page support the evidence summary; which category it would assign; which passage backs its answer. Because it sees the analysts' category, its category is a second opinion rather than a blind rating.
@@ -121,11 +123,15 @@ Each answer comes with a score card and the verbatim quotes it could use. The mo
 
 ## Screenshots
 
-**Comparison:** scores, pillar charts and the Meet threshold.
+**Ask:** a what-if question answered with the official, AI reviewer and scenario scores, all computed by the scoring engine.
+
+![Chat with a scenario score](docs/screenshots/chat.png)
+
+**Compare:** scores, pillar charts and the Meet threshold.
 
 ![Comparison page](docs/screenshots/compare_overview.png)
 
-**Single bank:** the calculation and the evidence behind every indicator, with links to the cited PDF page.
+**Bank detail:** the calculation and the evidence behind every indicator, with links to the cited PDF page and the verbatim quotes.
 
 ![Evidence breakdown](docs/screenshots/evidence_breakdown.png)
 
@@ -161,7 +167,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example). On Streamlit Community Cloud, add `OLLAMA_API_KEY` under the app's **Settings → Secrets** instead of a `.env` file.
 
-To run the tests (132 tests, no LLM or network needed):
+To run the tests (144 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt

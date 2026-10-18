@@ -96,3 +96,18 @@ def test_failed_availability_probe_is_rechecked(monkeypatch, tmp_path):
         get.assert_not_called()
         clock[0] += local_llm.RECHECK_AFTER_S
         assert llm.is_available() is True  # Ollama started later is picked up
+
+
+def test_chat_calls_fail_fast_and_report_busy(tmp_path, monkeypatch):
+    from tools.llm_provider import ProviderBusy
+    from tools.local_llm import LLMBusy
+
+    monkeypatch.setenv("OLLAMA_API_KEY", "test-key-not-real")
+    llm = LocalLLM(LocalLLMConfig(enabled=True, provider="auto", cache_dir=tmp_path, timeout=120, chat_timeout=45))
+    assert llm._client(interactive=True).timeout == 45 and llm._client().timeout == 120
+    assert llm._client(interactive=True).max_retry_wait_s == 20
+    fake = mock.Mock()
+    fake.chat_json.side_effect = ProviderBusy("ollama-cloud is busy or not responding (HTTP 429)")
+    with mock.patch.object(LocalLLM, "_client", return_value=fake):
+        with pytest.raises(LLMBusy):
+            llm.ask_json("system", "user")

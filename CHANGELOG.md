@@ -2,6 +2,16 @@
 
 ## October 2026: after the revision
 
+- **Interface reorganised** into four sections across the top of the page (Ask, Compare, Bank detail, Method & data) instead of a sidebar menu that is hidden on phones. Sections can be linked directly (`?section=method`).
+- **Method & data** gathers the methodology, a downloadable evidence table with the verbatim quotes, the quote-check result (88 of 88), and the blind AI review and AI evidence review results, with links to the re-check worksheet and the scoring-options analysis.
+- **Phone layout.** The score cards wrap two per row on narrow screens instead of stacking one per row. Their labels are shorter, so none is cut off; the controversy category moved to the label line.
+- **Chat:**
+  - A busy AI service now fails fast with a clear message, and the request is refunded. This was found on the live demo: the free Ollama Cloud tier serves one request at a time with a short queue, and a full queue left visitors waiting for minutes.
+  - A "Reading your question..." message shows while the question is routed.
+  - Numbers in an answer that are not in the scores or evidence are flagged, like unknown page citations.
+  - The score card explanation appears once, at the top of the chat.
+  - The model is told not to cite the internal SCORES and EVIDENCE sections.
+- **README screenshots** updated, including the chat.
 - **Blind AI review** (`tools/blind_review.py`, `python -m scripts.review_evidence --blind`). The model rates each row from the quoted report pages and the written definitions only, without the analysts' category or summary, and the prompt doesn't name the bank. Its quotes are checked against the pages as before.
   - Result with gemma4:31b: same category as the analysts on 43 of 45 rows; quotes found for 43 of 45.
   - The two disagreements (Rabobank board independence and controversy) are in `docs/blind_review.md` and the re-check worksheet. No category was changed.

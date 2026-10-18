@@ -108,3 +108,19 @@ def test_facts_round_pillars_like_the_rest_of_the_app(agent, offline_server):
     ctx = agent.context(Route(banks=["ING Group"], indicators=[], intent="explain"))
     shown = offline_server.score_bank("ING Group")["scores"]["pillars"]
     assert shown["E"] == 84.3 and "E 84.3," in agent.facts(ctx)  # same rounding as the page
+
+
+def test_numbers_not_in_the_scores_or_evidence_are_flagged(agent):
+    ctx = agent.context(Route(banks=["ABN AMRO"], indicators=[], intent="what_if", scenario={"ABN AMRO": {"exec_comp_esg": ">=20"}}))
+    scenario = ctx.cards[0].scenario.final
+    ok = f"ABN AMRO would score {scenario:.1f} (+{scenario - 68.6:.1f}), up from 68.6 (ABN AMRO, p. 178)."
+    assert ChatAgent.unknown_numbers(ok, ctx) == []
+    assert ChatAgent.unknown_numbers("It would score 73.0, a rise of 4.4 points; two indicators change.", ctx) == ["73.0", "4.4"]
+    assert ChatAgent.unknown_numbers("See pp. 999-1000 and p. 12345.", ctx) == []  # page numbers are checked separately
+
+
+def test_server_records_unknown_numbers_after_streaming():
+    server, _ = server_with_stub(StubLLM(answer="ING Group scores 99.9 overall."))
+    turn = server.chat_turn("How does ING score?")
+    list(server.stream_answer(turn))
+    assert turn.unknown_numbers == ["99.9"]

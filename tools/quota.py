@@ -55,3 +55,9 @@ class DailyQuota:
                 return False
             self._used += 1
             return True
+
+    def refund(self) -> None:
+        """Give back one request (e.g. the AI service was busy and nothing was answered)."""
+        with self._lock:
+            self._roll_over()
+            self._used = max(self._used - 1, 0)

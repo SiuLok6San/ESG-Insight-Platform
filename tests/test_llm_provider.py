@@ -138,3 +138,23 @@ def test_stream_retries_before_the_first_byte_and_never_caches_a_failed_reply(cl
 def test_stream_is_decoded_as_utf8(client):
     with mock.patch("tools.llm_provider.requests.post", return_value=FakeStream(sse("1.5°C-aligned"))):
         assert "".join(client.chat_stream([{"role": "user", "content": "q"}])) == "1.5°C-aligned"
+
+
+def test_long_retry_after_gives_up_at_once_as_busy(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", FAKE_KEY)
+    slept = []
+    monkeypatch.setattr(llm_provider.time, "sleep", slept.append)
+    client = OpenAICompatibleClient("gemini", cache_dir=tmp_path, min_interval_s=0, max_retry_wait_s=20)
+    busy = FakeResponse(status=429, headers={"Retry-After": "30"})
+    with mock.patch("tools.llm_provider.requests.post", return_value=busy) as post:
+        with pytest.raises(llm_provider.ProviderBusy):
+            client.chat_json("s", "u")
+    assert post.call_count == 1 and slept == []  # no point waiting 30 s while a visitor watches
+
+
+def test_repeated_timeouts_end_as_busy(client):
+    timeout = __import__("requests").Timeout("slow")
+    with mock.patch("tools.llm_provider.requests.post", side_effect=timeout) as post:
+        with pytest.raises(llm_provider.ProviderBusy, match="busy or not responding"):
+            client.chat_json("s", "u")
+    assert post.call_count == client.max_retries

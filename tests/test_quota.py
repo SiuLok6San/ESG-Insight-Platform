@@ -3,8 +3,8 @@ from datetime import date, timedelta
 import pytest
 
 from server import Server
-from tests.helpers import server_with_stub
-from tools.local_llm import LLMUnavailable
+from tests.helpers import StubLLM, server_with_stub
+from tools.local_llm import LLMBusy, LLMUnavailable
 from tools.quota import DailyLimitReached, DailyQuota
 
 
@@ -73,3 +73,37 @@ def test_assistant_respects_the_daily_limit_and_the_llm_switch():
         with pytest.raises(LLMUnavailable):
             call()
     assert offline.ai_requests_left_today() == 50
+
+
+def test_refund_gives_back_one_request():
+    quota = DailyQuota(1, today=Clock())
+    assert quota.try_consume() and quota.remaining() == 0
+    quota.refund()
+    assert quota.remaining() == 1
+    quota.refund()
+    assert quota.remaining() == 1  # never above the limit
+
+
+class BusyAfterRouting(StubLLM):
+    def stream(self, messages):
+        yield "Partial "
+        raise LLMBusy("ollama-cloud is busy or not responding (HTTP 429)")
+
+
+def test_busy_service_refunds_the_request_and_caches_nothing():
+    server, _ = server_with_stub(BusyAfterRouting(), daily_ai_limit=2)
+    turn = server.chat_turn("Which bank is strongest?")
+    with pytest.raises(LLMBusy):
+        list(server.stream_answer(turn))
+    assert server.ai_requests_left_today() == 2 and not server.chat_turn("Which bank is strongest?").from_cache
+
+
+def test_busy_router_stops_before_the_answer_call():
+    class BusyRouter(StubLLM):
+        def ask_json(self, system, user):
+            raise LLMBusy("busy")
+
+    server, stub = server_with_stub(BusyRouter(), daily_ai_limit=2)
+    with pytest.raises(LLMBusy):
+        server.chat_turn("Which bank is strongest?")
+    assert server.ai_requests_left_today() == 2 and stub.calls == []

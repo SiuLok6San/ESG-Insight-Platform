@@ -47,7 +47,7 @@ def test_streamlit_compare_page_renders():
 
 def test_streamlit_single_bank_page_renders():
     at = AppTest.from_file(APP, default_timeout=60).run()
-    at.sidebar.radio[0].set_value("Single bank").run()
+    at.segmented_control[0].set_value("Bank detail").run()
     assert not at.exception
     assert at.selectbox[0].value == BANKS[0]
     text = "\n".join(m.value for m in at.markdown)
@@ -69,7 +69,28 @@ def test_server_cache_is_bounded(monkeypatch):
 
 def test_streamlit_shows_engine_deduction():
     at = AppTest.from_file(APP, default_timeout=60).run()
-    at.sidebar.radio[0].set_value("Single bank").run()
+    at.segmented_control[0].set_value("Bank detail").run()
     text = "\n".join(m.value for m in at.markdown)
     assert "**Controversy - moderate (−2 points)**" in text
     assert "p. None" not in text
+
+
+def test_method_and_data_page_shows_the_evidence_and_the_checks():
+    at = AppTest.from_file(APP, default_timeout=60)
+    at.query_params["section"] = "method"  # deep link, e.g. ?section=method
+    at.run()
+    assert not at.exception
+    assert at.segmented_control[0].value == "Method & data"
+    assert len(at.dataframe[0].value) == 45  # 3 banks x (14 indicators + controversy)
+    text = "\n".join(m.value for m in at.markdown)
+    assert "88 of 88 excerpts found" in text
+    assert "**Same category as the analysts:** 43 of 45" in text
+    assert at.get("download_button")
+
+
+def test_navigation_is_at_the_top_and_updates_the_link():
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    assert at.segmented_control[0].value == "Compare"  # without an LLM the benchmark comes first
+    at.segmented_control[0].set_value("Bank detail").run()
+    assert at.query_params["section"] == ["bank"] or at.query_params["section"] == "bank"
+    assert not at.sidebar.radio  # no navigation hidden in the sidebar

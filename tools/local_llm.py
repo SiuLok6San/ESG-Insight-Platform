@@ -27,7 +27,7 @@ from typing import Dict, Iterator, List, Optional
 import requests
 from dotenv import load_dotenv
 
-from tools.llm_provider import PROVIDERS, OpenAICompatibleClient, ProviderError
+from tools.llm_provider import PROVIDERS, OpenAICompatibleClient, ProviderBusy, ProviderError
 
 CACHE_DIR = Path(__file__).resolve().parent.parent / ".cache" / "llm"
 # A failed local availability probe is retried after this many seconds.
@@ -54,11 +54,19 @@ class LocalLLMConfig:
     timeout: int = field(default_factory=lambda: _env_int("LLM_TIMEOUT", 120))
     max_tokens: int = field(default_factory=lambda: _env_int("LLM_NUM_PREDICT", 1024))
     max_retries: int = field(default_factory=lambda: _env_int("LLM_MAX_RETRIES", 3))
+    # The chat fails fast instead: a visitor is waiting, and a busy free tier rarely clears within seconds.
+    chat_timeout: int = field(default_factory=lambda: _env_int("LLM_CHAT_TIMEOUT", 45))
+    chat_retries: int = field(default_factory=lambda: _env_int("LLM_CHAT_RETRIES", 2))
+    chat_max_retry_wait_s: float = 20.0
     cache_dir: Optional[Path] = CACHE_DIR
 
 
 class LLMUnavailable(RuntimeError):
     """Raised when the LLM is disabled, unreachable or misconfigured."""
+
+
+class LLMBusy(LLMUnavailable):
+    """Raised when the LLM service is rate-limiting or not responding in time; try again later."""
 
 
 class LocalLLM:
@@ -107,25 +115,31 @@ class LocalLLM:
             self._checked_at = now
         return self._available
 
-    def _client(self) -> OpenAICompatibleClient:
+    def _client(self, interactive: bool = False) -> OpenAICompatibleClient:
+        """Client for one call; ``interactive`` (the chat) uses shorter timeouts and fewer retries."""
         base_url = self.config.local_base_url + "/v1/" if self.provider == "ollama" else None
         return OpenAICompatibleClient(
             self.provider,
             model=self.model,
             cache_dir=self.config.cache_dir,
-            timeout=self.config.timeout,
-            max_retries=self.config.max_retries,
+            timeout=self.config.chat_timeout if interactive else self.config.timeout,
+            max_retries=self.config.chat_retries if interactive else self.config.max_retries,
             min_interval_s=0,
             base_url=base_url,
+            max_retry_wait_s=self.config.chat_max_retry_wait_s if interactive else 120.0,
         )
 
-    def _require(self) -> OpenAICompatibleClient:
+    def _require(self, interactive: bool = False) -> OpenAICompatibleClient:
         if not self.is_available():
             raise LLMUnavailable(f"LLM {self.describe()} is disabled or not reachable")
         try:
-            return self._client()
+            return self._client(interactive)
         except ValueError as exc:  # e.g. a provider without a default model
             raise LLMUnavailable(str(exc)) from exc
+
+    @staticmethod
+    def _unavailable(exc: ProviderError) -> LLMUnavailable:
+        return LLMBusy(str(exc)) if isinstance(exc, ProviderBusy) else LLMUnavailable(str(exc))
 
     def ask(self, prompt: str) -> str:
         """Return the model's reply to ``prompt`` (from cache when possible)."""
@@ -133,20 +147,20 @@ class LocalLLM:
         try:
             return client.chat_text(prompt, max_tokens=self.config.max_tokens)
         except ProviderError as exc:
-            raise LLMUnavailable(str(exc)) from exc
+            raise self._unavailable(exc) from exc
 
     def ask_json(self, system: str, user: str) -> Dict[str, object]:
         """Return the model's reply as a JSON object (from cache when possible)."""
-        client = self._require()
+        client = self._require(interactive=True)
         try:
             return client.chat_json(system, user)
         except ProviderError as exc:
-            raise LLMUnavailable(str(exc)) from exc
+            raise self._unavailable(exc) from exc
 
     def stream(self, messages: List[Dict[str, str]]) -> Iterator[str]:
         """Yield the reply to ``messages`` in pieces (one piece when cached)."""
-        client = self._require()
+        client = self._require(interactive=True)
         try:
             yield from client.chat_stream(messages, max_tokens=self.config.max_tokens)
         except ProviderError as exc:
-            raise LLMUnavailable(str(exc)) from exc
+            raise self._unavailable(exc) from exc

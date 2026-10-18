@@ -46,6 +46,14 @@ class ProviderError(RuntimeError):
     """The provider could not be called or returned an unusable response."""
 
 
+class ProviderBusy(ProviderError):
+    """The provider is rate-limiting, overloaded or not responding in time.
+
+    Free tiers can be tight (Ollama Cloud's free plan serves one request at a
+    time per key), so callers should tell the user to try again later.
+    """
+
+
 def _strip_code_fence(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
@@ -65,6 +73,7 @@ class OpenAICompatibleClient:
         max_retries: int = 5,
         min_interval_s: float = 4.5,
         base_url: Optional[str] = None,
+        max_retry_wait_s: float = 120.0,
     ) -> None:
         if provider not in PROVIDERS:
             raise ValueError(f"Unknown provider {provider!r}; choose from {sorted(PROVIDERS)}")
@@ -78,6 +87,7 @@ class OpenAICompatibleClient:
         self.timeout = timeout
         self.max_retries = max_retries
         self.min_interval_s = min_interval_s  # spacing between uncached calls (free-tier rate limits)
+        self.max_retry_wait_s = max_retry_wait_s  # give up instead of waiting longer than this before a retry
         self._last_call = 0.0
 
     def _api_key(self) -> Optional[str]:
@@ -190,24 +200,35 @@ class OpenAICompatibleClient:
                     self.config.base_url + "chat/completions",
                     json=payload,
                     headers=headers,
-                    timeout=self.timeout,
+                    timeout=(10, self.timeout),
                     stream=True,
                 )
             except requests.RequestException as exc:
                 last_error = f"network error: {type(exc).__name__}"
-                time.sleep(2**attempt)
+                self._wait_before_retry(attempt, last_error, 2**attempt)
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 last_error = f"HTTP {resp.status_code}"
+                retry_after = resp.headers.get("Retry-After", "")
                 resp.close()
-                time.sleep(2**attempt)
+                self._wait_before_retry(attempt, last_error, self._retry_after(retry_after, 2**attempt))
                 continue
             if resp.status_code != 200:
                 raise ProviderError(f"HTTP {resp.status_code} from {self.config.name}: {resp.text[:300]}")
             # Event streams often omit the charset; requests would then decode UTF-8 as Latin-1 ("Â°C").
             resp.encoding = "utf-8"
             return resp
-        raise ProviderError(f"{self.config.name} failed after {self.max_retries} attempts ({last_error})")
+        raise ProviderBusy(f"{self.config.name} is busy or not responding ({last_error})")
+
+    @staticmethod
+    def _retry_after(header: str, default: float) -> float:
+        return float(header) if header.replace(".", "", 1).isdigit() else default
+
+    def _wait_before_retry(self, attempt: int, error: str, wait: float) -> None:
+        """Sleep before the next attempt, or give up if there is none or the wait is too long."""
+        if attempt >= self.max_retries or wait > self.max_retry_wait_s:
+            raise ProviderBusy(f"{self.config.name} is busy or not responding ({error})")
+        time.sleep(wait)
 
     def _cache_key(self, payload: Dict[str, object]) -> str:
         return hashlib.sha256(json.dumps({"base_url": self.config.base_url, **payload}, sort_keys=True).encode()).hexdigest()
@@ -227,16 +248,16 @@ class OpenAICompatibleClient:
             self._last_call = time.monotonic()
             try:
                 resp = requests.post(
-                    self.config.base_url + "chat/completions", json=payload, headers=headers, timeout=self.timeout
+                    self.config.base_url + "chat/completions", json=payload, headers=headers, timeout=(10, self.timeout)
                 )
             except requests.RequestException as exc:
                 last_error = f"network error: {type(exc).__name__}"
-                time.sleep(2**attempt)
+                self._wait_before_retry(attempt, last_error, 2**attempt)
                 continue
             if resp.status_code == 429 or resp.status_code >= 500:
                 last_error = f"HTTP {resp.status_code}"
                 retry_after = resp.headers.get("Retry-After", "")
-                time.sleep(float(retry_after) if retry_after.replace(".", "", 1).isdigit() else 2**attempt * 5)
+                self._wait_before_retry(attempt, last_error, self._retry_after(retry_after, 2**attempt * 5))
                 continue
             if resp.status_code != 200:
                 # The body explains bad requests; it never contains the key.
@@ -245,7 +266,7 @@ class OpenAICompatibleClient:
                 return resp.json()["choices"][0]["message"]["content"] or ""
             except (KeyError, IndexError, TypeError, ValueError) as exc:
                 raise ProviderError(f"Unexpected response from {self.config.name}: {exc}") from exc
-        raise ProviderError(f"{self.config.name} failed after {self.max_retries} attempts ({last_error})")
+        raise ProviderBusy(f"{self.config.name} is busy or not responding ({last_error})")
 
     def _read_cache(self, key: str) -> Optional[Dict[str, object]]:
         if self.cache_dir is None:

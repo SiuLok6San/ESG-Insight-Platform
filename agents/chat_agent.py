@@ -23,6 +23,7 @@ from typing import Dict, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 from tools.dutch_banks import resolve_bank
 from tools.evidence import EvidenceTable
+from tools.local_llm import LLMBusy
 from tools.score_engine import ALL_KEYS, NOT_DISCLOSED, RUBRIC_BY_KEY, BankScore, ScoreEngine, allowed_categories, round1
 
 INTENTS = ("explain", "compare", "what_if", "other")
@@ -92,6 +93,8 @@ class ChatAgent:
         """Ask the LLM what the question is about; fall back to bank names in the text if that fails."""
         try:
             raw = self.llm.ask_json(ROUTER_SYSTEM, self._router_prompt(question, history))
+        except LLMBusy:
+            raise  # the answer call would hit the same busy service; stop now
         except Exception as exc:  # routing is best effort; the answer step still works
             route = Route(banks=self._banks_named_in(question, history), indicators=[], intent="other")
             route.rejected.append(f"routing failed: {exc}")
@@ -236,7 +239,8 @@ class ChatAgent:
             "from their FY2025 annual reports. Answer in plain English, at most about 200 words.\n"
             "Rules:\n"
             "- Use only the EVIDENCE and SCORES below. Do not use outside knowledge.\n"
-            "- Cite the bank and page for every fact from the evidence, like (ING Group, p. 111).\n"
+            "- Cite the bank and page for every fact from the evidence, like (ING Group, p. 111). Do not cite or "
+            "name the SCORES or EVIDENCE sections; scores need no citation.\n"
             "- Every number you mention must appear in the SCORES or EVIDENCE. Never compute or estimate a score.\n"
             "- The official score comes from the analysts' evidence table. "
             f"The AI reviewer score is the same engine applied to other categories ({self.reviewer_note}) "
@@ -293,3 +297,33 @@ class ChatAgent:
             if not ((bank, page) in known if bank else page in all_pages):
                 problems.append(match.group(0).strip())
         return problems
+
+    @staticmethod
+    def unknown_numbers(answer: str, ctx: ChatContext) -> List[str]:
+        """Numbers in the answer that appear nowhere in the scores or evidence the model was given.
+
+        Page numbers and small whole numbers (counts such as "two indicators") are not checked.
+        """
+        known = {_number_value(m.group(0)) for m in _NUMBER.finditer(ChatAgent.facts(ctx))}
+        pages = [m.span(2) for m in re.finditer(r"\b(pp?)\.\s*(\d+(?:\s*[-–]\s*\d+)?)", answer)]
+        flagged: List[str] = []
+        for m in _NUMBER.finditer(answer):
+            if any(start <= m.start() < end for start, end in pages):
+                continue
+            value = _number_value(m.group(0))
+            if value is None or (float(value).is_integer() and abs(value) < 10):
+                continue
+            if value not in known and m.group(0) not in flagged:
+                flagged.append(m.group(0))
+        return flagged
+
+
+# Numbers such as 72.1, +3.5, -2, 14%, 1,268 or 704.5 (signs and % are ignored when comparing).
+_NUMBER = re.compile(r"(?<![\w.])[+−-]?\d{1,3}(?:,\d{3})+(?:\.\d+)?%?|(?<![\w.])[+−-]?\d+(?:\.\d+)?%?")
+
+
+def _number_value(text: str) -> Optional[float]:
+    try:
+        return abs(float(text.replace("−", "-").replace(",", "").rstrip("%")))
+    except ValueError:
+        return None
