@@ -1,5 +1,10 @@
 # Changelog
 
+## October 2026: after the revision
+
+- **Continuous integration.** GitHub Actions runs the test suite on every push and pull request (Python 3.12, Linux); the README shows the status badge.
+- **Live demo** deployed on Streamlit Community Cloud and linked from the README.
+
 ## October 2026: evidence-based revision
 
 Replaced placeholder fallback scoring with evidence-based scoring; removed the simulated confidence band; added sensitivity analysis; fixed package structure and dependencies.
