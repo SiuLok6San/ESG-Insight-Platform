@@ -35,3 +35,13 @@ def test_published_robustness(offline_server):
     ]
     assert report["label_flips_by_weight"] == {"ING Group": 47, "Rabobank": 0, "ABN AMRO": 0}
     assert sum(m["changes_label"] for m in report["moves"]) == 7
+
+
+def test_published_ai_review(offline_server):
+    summary = offline_server.ai_review_summary()
+    assert summary["rows"] == 45
+    assert summary["verdicts"] == {"supports": 32, "partially_supports": 13, "does_not_support": 0}
+    assert summary["category_agrees"] == 39
+    assert summary["quote_verified"] == 42
+    assert summary["models"] == ["ollama-cloud/gemma4:31b"]
+    assert len(summary["disagreements"]) == 17

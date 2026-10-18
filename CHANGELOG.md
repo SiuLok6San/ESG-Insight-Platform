@@ -4,7 +4,7 @@
 
 - **Continuous integration.** GitHub Actions runs the test suite on every push and pull request (Python 3.12, Linux); the README shows the status badge.
 - **Live demo** deployed on Streamlit Community Cloud and linked from the README.
-- **AI evidence review.** An offline LLM check of every evidence row against its cited page, with verbatim-quote verification. Results are shown in the app as "not used in score". It uses an OpenAI-compatible client (Ollama Cloud by default; Gemini, Groq or local Ollama by configuration), and adds tests plus a guard that fails if an API key is ever committed.
+- **AI evidence review.** An offline LLM check of every evidence row against its cited page, with verbatim-quote verification. Results are shown in the app as "not used in score". It uses an OpenAI-compatible client (Ollama Cloud by default; Gemini, Groq or local Ollama by configuration), and adds tests plus a guard that fails if an API key is ever committed. First run (Ollama Cloud, gemma4:31b): 32 of 45 rows fully supported, 13 partly, 0 not supported; same category in 39 of 45; 42 of 45 quotes verified.
 
 ## October 2026: evidence-based revision
 

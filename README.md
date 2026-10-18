@@ -40,6 +40,15 @@ Scores from the evidence table (FY2025 annual reports), default weights 35% E / 
 - ING Group scores at least as high as Rabobank on every pillar.
 - Rabobank's lead over ABN AMRO comes from a higher Environmental score and a smaller controversy deduction.
 
+**AI evidence review** (Ollama Cloud, `gemma4:31b`, run on 17 October 2026; not used in score)
+
+An independent LLM checked each of the 45 evidence rows against its single cited page:
+- **Evidence summary:** fully supported in 32 rows, partly supported in 13, not supported in 0. Most "partly" verdicts come from summaries that also use facts from pages cited in the analyst's notes, which the reviewer does not see.
+- **Category:** the same as the analyst's in 39 of 45 rows.
+  - 4 of the 6 differences come from facts on note-cited pages (e.g. gender pay gap figures printed on the next page).
+  - The other 2 are judgment calls already flagged during the evidence review: Rabobank's risk management (`strong` vs `full`), and Rabobank's board independence, which the report states only as compliance with the Dutch Corporate Governance Code, without a headcount.
+- **Quotes:** 42 of 45 were found verbatim on the cited page. The other 3 were stitched together from table cells or shortened, and the check correctly rejected them.
+
 ## Methodology
 
 The model scores five auditable dimensions: three pillars (**Environmental**, **Social**, **Governance**), a **controversy** adjustment, and a **compliance** label.
@@ -135,7 +144,7 @@ ollama pull llama3
 
 LLM settings are optional; see [`.env.example`](.env.example).
 
-To run the tests (90 tests, no LLM or network needed):
+To run the tests (91 tests, no LLM or network needed):
 
 ```bash
 pip install -r requirements-dev.txt
