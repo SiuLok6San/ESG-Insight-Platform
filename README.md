@@ -2,6 +2,8 @@
 
 An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every score traces back to a cited page in the bank's annual report.
 
+**Live demo:** [dutch-bank-esg.streamlit.app](https://dutch-bank-esg.streamlit.app). The optional AI assistant is off online. If the app has been idle, it may take about 30 seconds to wake up.
+
 ## Context
 
 - **Course project:** Columbia University industry-sponsored course project with Accenture, September–November 2025. Team project.
