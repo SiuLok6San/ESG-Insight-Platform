@@ -8,14 +8,16 @@ An evidence-based ESG benchmark of ING Group, ABN AMRO and Rabobank, where every
 
 ## Context
 
-- **Course project:** Columbia University industry-sponsored course project with Accenture, September–November 2025. Team project.
-- **My role** ([@SiuLok6San](https://github.com/SiuLok6San)):
-  - Designed the ESG scoring framework: a 25-indicator rubric (14 of which are scored in this implementation) across environmental, social, and governance pillars, pillar weights (35/30/35), a controversy adjustment, and a compliance label
-  - Analyzed the banks' annual, sustainability, and CSRD reports and translated regulatory disclosures into rubric categories
-  - Built the interactive Streamlit dashboard (radar charts, peer comparison, score explanations) using AI coding tools
+- **Course project:** Columbia University industry-sponsored course project with Accenture, September–November 2025. Team project by [@SiuLok6San](https://github.com/SiuLok6San) and [@yuqingtao1103](https://github.com/yuqingtao1103).
+- **Shared work:**
+  - Reviewed the banks' annual, sustainability, and CSRD disclosures and translated EU disclosure requirements into the rubric's indicators and categories
+  - Re-checked the evidence rows flagged by the AI reviews and decided the open judgment calls (October 2026; see the [re-check worksheet](docs/evidence_recheck.md))
   - Presented the framework and findings to Accenture stakeholders
-- **Yuqing's role** ([@yuqingtao1103](https://github.com/yuqingtao1103)):
-  - Reviewed disclosures and built indicators: reviewed European banks' sustainability disclosures and translated EU disclosure requirements into validated ESG indicators for comparing the banks' reporting
+- **[@SiuLok6San](https://github.com/SiuLok6San):**
+  - Designed the ESG scoring framework: a 25-indicator rubric (14 of which are scored in this implementation) across environmental, social, and governance pillars, pillar weights (35/30/35), a controversy adjustment, and a compliance label
+  - Built the interactive Streamlit dashboard (radar charts, peer comparison, score explanations) using AI coding tools
+- **[@yuqingtao1103](https://github.com/yuqingtao1103):**
+  - Validated the ESG indicators so that the banks' reporting can be compared like for like
   - Checked data quality: identified gaps and inconsistencies across the banks' ESG reports, improving the reliability and auditability of the reported data
 - **Revision (October 2026):** the course prototype used placeholder scores when no local LLM was available. The revision rebuilt the scoring to be fully evidence-based and replaced the prototype's placeholder confidence band with a sensitivity analysis; see the [CHANGELOG](CHANGELOG.md).
 
